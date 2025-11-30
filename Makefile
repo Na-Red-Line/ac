@@ -1,8 +1,12 @@
 CC = gcc
 CFLAGS = -std=c17 -g -fno-common
+SRCS=$(wildcard *.c)
+OBJS=$(SRCS:.c=.o)
 
-ac: main.o
-	$(CC) -o ac main.o $(LDFLAGS)
+ac: $(OBJS)
+	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+
+$(OBJS): ac.h
 
 test: ac
 	./test.sh
