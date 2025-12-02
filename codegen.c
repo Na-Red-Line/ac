@@ -1,8 +1,10 @@
 #include "ac.h"
-#include <assert.h>
-#include <stdio.h>
 
 static int depth;
+static char *argreg[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+static Obj *current_fn;
+
+static void gen_expr(Node *node);
 
 static int count(void) {
   static int i = 1;
@@ -28,12 +30,32 @@ static int align_to(int n, int align) {
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
 static void gen_addr(Node *node) {
-  if (node->kind == ND_VAR) {
+  switch (node->kind) {
+  case ND_VAR:
     printf("  lea %d(%%rbp), %%rax\n", node->var->offset);
+    return;
+
+  case ND_DEREF:
+    gen_expr(node->lhs);
     return;
   }
 
   error("not an lvalue");
+}
+
+// Load a value from where %rax is pointing to.
+static void load(Type *ty) {
+  if (ty->kind == TY_ARRAY) {
+    return;
+  }
+
+  printf("  mov (%%rax), %%rax\n");
+}
+
+// Store %rax to an address that the stack top is pointing to.
+static void store(void) {
+  pop("%rdi");
+  printf("  mov %%rax, (%%rdi)\n");
 }
 
 static void gen_expr(Node *node) {
@@ -49,16 +71,40 @@ static void gen_expr(Node *node) {
 
   case ND_VAR:
     gen_addr(node);
-    printf("  mov (%%rax), %%rax\n");
+    load(node->ty);
+    return;
+
+  case ND_DEREF:
+    gen_expr(node->lhs);
+    load(node->ty);
+    return;
+
+  case ND_ADDR:
+    gen_addr(node->lhs);
     return;
 
   case ND_ASSIGN:
     gen_addr(node->lhs);
     push();
     gen_expr(node->rhs);
-    pop("%rdi");
-    printf("  mov %%rax, (%%rdi)\n");
+    store();
     return;
+
+  case ND_FUNCALL: {
+    int nargs = 0;
+    for (Node *arg = node->args; arg; arg = arg->next) {
+      gen_expr(arg);
+      push();
+      nargs++;
+    }
+
+    for (int i = nargs - 1; i >= 0; --i)
+      pop(argreg[i]);
+
+    printf("  mov $0, %%rax\n");
+    printf("  call %s\n", node->funcname);
+    return;
+  }
   }
 
   gen_expr(node->rhs);
@@ -147,7 +193,7 @@ static void gen_stmt(Node *node) {
 
   case ND_RETURN:
     gen_expr(node->lhs);
-    printf("	jmp .L.return\n");
+    printf("	jmp .L.return.%s\n", current_fn->name);
     return;
 
   case ND_EXPR_STMT:
@@ -159,31 +205,50 @@ static void gen_stmt(Node *node) {
 }
 
 // Assign offsets to local variables.
-static void assign_lvar_offsets(Function *prog) {
-  int offset = 0;
-  for (Obj *var = prog->locals; var; var = var->next) {
-    offset += 8;
-    var->offset = -offset;
+static void assign_lvar_offsets(Obj *prog) {
+  for (Obj *fn = prog; fn; fn = fn->next) {
+    if (!fn->is_function)
+      continue;
+
+    int offset = 0;
+    for (Obj *var = fn->locals; var; var = var->next) {
+      offset += var->ty->size;
+      var->offset = -offset;
+    }
+    fn->stack_size = align_to(offset, 16);
   }
-  prog->stack_size = align_to(offset, 16);
 }
 
-void codegen(Function *prog) {
+void codegen(Obj *prog) {
   assign_lvar_offsets(prog);
 
-  printf("  .globl main\n");
-  printf("main:\n");
+  for (Obj *fn = prog; fn; fn = fn->next) {
+    if (!fn->is_function)
+      continue;
 
-  // Prologue
-  printf("  push %%rbp\n");
-  printf("  mov %%rsp, %%rbp\n");
-  printf("  sub $%d, %%rsp\n", prog->stack_size);
+    printf("  .globl %s\n", fn->name);
+    printf("  .text\n");
+    printf("%s:\n", fn->name);
+    current_fn = fn;
 
-  gen_stmt(prog->body);
-  assert(depth == 0);
+    // Prologue
+    printf("  push %%rbp\n");
+    printf("  mov %%rsp, %%rbp\n");
+    printf("  sub $%d, %%rsp\n", fn->stack_size);
 
-  printf(".L.return:\n");
-  printf("  mov %%rbp, %%rsp\n");
-  printf("  pop %%rbp\n");
-  printf("  ret\n");
+    // Save passed-by-register arguments to the stack
+    int i = 0;
+    for (Obj *var = fn->params; var; var = var->next)
+      printf("  mov %s, %d(%%rbp)\n", argreg[i++], var->offset);
+
+    // Emit code
+    gen_stmt(fn->body);
+    assert(depth == 0);
+
+    // Epilogue
+    printf(".L.return.%s:\n", fn->name);
+    printf("  mov %%rbp, %%rsp\n");
+    printf("  pop %%rbp\n");
+    printf("  ret\n");
+  }
 }
