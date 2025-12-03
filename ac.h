@@ -11,6 +11,12 @@ typedef struct Type Type;
 typedef struct Node Node;
 
 //
+// strings.c
+//
+
+char *format(char *fmt, ...);
+
+//
 // tokenize.c
 //
 
@@ -19,6 +25,7 @@ typedef enum {
   TK_IDENT,   // Identifiers
   TK_PUNCT,   // Punctuators
   TK_KEYWORD, // Keywords
+  TK_STR,     // String literals
   TK_NUM,     // Numeric literals
   TK_EOF,     // End-of-file markers
 } TokenKind;
@@ -31,6 +38,8 @@ struct Token {
   int val;        // If kind is TK_NUM, its value
   char *loc;      // Token location
   int len;        // Token length
+  Type *ty;       // Used if TK_STR
+  char *str;      // String literal contents including terminating '\0'
 };
 
 _Noreturn void error(char *fmt, ...);
@@ -59,6 +68,9 @@ struct Obj {
 
   // Global variable or function
   bool is_function;
+
+  // Global variable
+  char *init_data;
 
   // Function
   Obj *params;
@@ -126,6 +138,7 @@ Obj *parse(Token *tok);
 //
 
 typedef enum {
+  TY_CHAR,
   TY_INT,
   TY_PTR,
   TY_FUNC,
@@ -151,6 +164,7 @@ struct Type {
   Type *next;
 };
 
+extern Type *ty_char;
 extern Type *ty_int;
 
 bool is_integer(Type *ty);

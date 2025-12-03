@@ -1,7 +1,8 @@
 #include "ac.h"
 
 static int depth;
-static char *argreg[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
+static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
 static Obj *current_fn;
 
 static void gen_expr(Node *node);
@@ -32,7 +33,13 @@ static int align_to(int n, int align) {
 static void gen_addr(Node *node) {
   switch (node->kind) {
   case ND_VAR:
-    printf("  lea %d(%%rbp), %%rax\n", node->var->offset);
+    if (node->var->is_local) {
+      // Local variable
+      printf("  lea %d(%%rbp), %%rax\n", node->var->offset);
+    } else {
+      // Global variable
+      printf("  lea %s(%%rip), %%rax\n", node->var->name);
+    }
     return;
 
   case ND_DEREF:
@@ -49,13 +56,20 @@ static void load(Type *ty) {
     return;
   }
 
-  printf("  mov (%%rax), %%rax\n");
+  if (ty->size == 1)
+    printf("	movsbq (%%rax), %%rax\n");
+  else
+    printf("  mov (%%rax), %%rax\n");
 }
 
 // Store %rax to an address that the stack top is pointing to.
-static void store(void) {
+static void store(Type *ty) {
   pop("%rdi");
-  printf("  mov %%rax, (%%rdi)\n");
+
+  if (ty->size == 1)
+    printf("	mov %%al, (%%rdi)\n");
+  else
+    printf("  mov %%rax, (%%rdi)\n");
 }
 
 static void gen_expr(Node *node) {
@@ -87,7 +101,7 @@ static void gen_expr(Node *node) {
     gen_addr(node->lhs);
     push();
     gen_expr(node->rhs);
-    store();
+    store(node->ty);
     return;
 
   case ND_FUNCALL: {
@@ -99,7 +113,7 @@ static void gen_expr(Node *node) {
     }
 
     for (int i = nargs - 1; i >= 0; --i)
-      pop(argreg[i]);
+      pop(argreg64[i]);
 
     printf("  mov $0, %%rax\n");
     printf("  call %s\n", node->funcname);
@@ -219,9 +233,25 @@ static void assign_lvar_offsets(Obj *prog) {
   }
 }
 
-void codegen(Obj *prog) {
-  assign_lvar_offsets(prog);
+static void emit_data(Obj *prog) {
+  for (Obj *var = prog; var; var = var->next) {
+    if (var->is_function)
+      continue;
 
+    printf("  .data\n");
+    printf("  .globl %s\n", var->name);
+    printf("%s:\n", var->name);
+
+    if (var->init_data) {
+      for (int i = 0; i < var->ty->size; i++)
+        printf("	.byte %d\n", var->init_data[i]);
+    } else {
+      printf("  .zero %d\n", var->ty->size);
+    }
+  }
+}
+
+static void emit_text(Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
     if (!fn->is_function)
       continue;
@@ -238,8 +268,12 @@ void codegen(Obj *prog) {
 
     // Save passed-by-register arguments to the stack
     int i = 0;
-    for (Obj *var = fn->params; var; var = var->next)
-      printf("  mov %s, %d(%%rbp)\n", argreg[i++], var->offset);
+    for (Obj *var = fn->params; var; var = var->next) {
+      if (var->ty->size == 1)
+        printf("  mov %s, %d(%%rbp)\n", argreg8[i++], var->offset);
+      else
+        printf("  mov %s, %d(%%rbp)\n", argreg64[i++], var->offset);
+    }
 
     // Emit code
     gen_stmt(fn->body);
@@ -251,4 +285,10 @@ void codegen(Obj *prog) {
     printf("  pop %%rbp\n");
     printf("  ret\n");
   }
+}
+
+void codegen(Obj *prog) {
+  assign_lvar_offsets(prog);
+  emit_data(prog);
+  emit_text(prog);
 }
