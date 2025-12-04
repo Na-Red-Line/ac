@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
 #include <ctype.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -48,7 +49,7 @@ _Noreturn void error_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
-Token *tokenize(char *input);
+Token *tokenize_file(char *filename);
 
 //
 // parse.c
@@ -99,6 +100,7 @@ typedef enum {
   ND_BLOCK,     // { ... }
   ND_FUNCALL,   // Function call
   ND_EXPR_STMT, // Expression statement
+  ND_STMT_EXPR, // Statement expression
   ND_VAR,       // Variable
   ND_NUM,       // Integer
 } NodeKind;
@@ -120,7 +122,7 @@ struct Node {
   Node *init;
   Node *inc;
 
-  // Block
+  // Block or statement expression
   Node *body;
 
   // Function call
@@ -178,4 +180,4 @@ void add_type(Node *node);
 // codegen.c
 //
 
-void codegen(Obj *prog);
+void codegen(Obj *prog, FILE *out);
