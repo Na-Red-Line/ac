@@ -19,7 +19,7 @@ _Noreturn void error(char *fmt, ...) {
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-_Noreturn static void verror_at(char *loc, char *fmt, va_list ap) {
+_Noreturn static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
   // Find a line containing `loc`.
   char *line = loc;
   while (current_input < line && line[-1] != '\n')
@@ -28,12 +28,6 @@ _Noreturn static void verror_at(char *loc, char *fmt, va_list ap) {
   char *end = loc;
   while (*end != '\n')
     end++;
-
-  // Get a line number.
-  int line_no = 1;
-  for (char *p = current_input; p < line; p++)
-    if (*p == '\n')
-      line_no++;
 
   // Print out the line.
   int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
@@ -50,15 +44,20 @@ _Noreturn static void verror_at(char *loc, char *fmt, va_list ap) {
 }
 
 _Noreturn void error_at(char *loc, char *fmt, ...) {
+  int line_no = 1;
+  for (char *p = current_input; p < loc; p++)
+    if (*p == '\n')
+      line_no++;
+
   va_list ap;
   va_start(ap, fmt);
-  verror_at(loc, fmt, ap);
+  verror_at(line_no, loc, fmt, ap);
 }
 
 _Noreturn void error_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
-  verror_at(tok->loc, fmt, ap);
+  verror_at(tok->line_no, tok->loc, fmt, ap);
 }
 
 // Consumes the current token if it matches `op`.
@@ -105,9 +104,11 @@ static bool is_ident2(char c) { return is_ident1(c) || ('0' <= c && c <= '9'); }
 
 // Read a punctuator token from p and returns its length.
 static int read_punct(char *p) {
-  if (startswith(p, "==") || startswith(p, "!=") || startswith(p, "<=") ||
-      startswith(p, ">="))
-    return 2;
+  static char *kw[] = {"==", "!=", "<=", ">=", "->"};
+
+  for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i)
+    if (startswith(p, kw[i]))
+      return strlen(kw[i]);
 
   return ispunct(*p) ? 1 : 0;
 }
@@ -124,7 +125,7 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
   static char *kw[] = {
-      "return", "if", "else", "for", "while", "int", "sizeof", "char",
+      "return", "if", "else", "for", "while", "int", "sizeof", "char", "struct",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -221,6 +222,21 @@ static void convert_keywords(Token *tok) {
       t->kind = TK_KEYWORD;
 }
 
+// Initialize line info for all tokens.
+static void add_line_numbers(Token *tok) {
+  char *p = current_input;
+  int n = 1;
+
+  do {
+    if (p == tok->loc) {
+      tok->line_no = n;
+      tok = tok->next;
+    }
+    if (*p == '\n')
+      n++;
+  } while (*p++);
+}
+
 // Tokenize a given string and returns new tokens.
 static Token *tokenize(char *filename, char *p) {
   current_filename = filename;
@@ -290,6 +306,7 @@ static Token *tokenize(char *filename, char *p) {
   }
 
   cur->next = new_token(TK_EOF, p, p);
+  add_line_numbers(head.next);
   convert_keywords(head.next);
   return head.next;
 }

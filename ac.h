@@ -10,6 +10,7 @@
 
 typedef struct Type Type;
 typedef struct Node Node;
+typedef struct Member Member;
 
 //
 // strings.c
@@ -41,6 +42,8 @@ struct Token {
   int len;        // Token length
   Type *ty;       // Used if TK_STR
   char *str;      // String literal contents including terminating '\0'
+
+  int line_no; // Line number
 };
 
 _Noreturn void error(char *fmt, ...);
@@ -92,6 +95,8 @@ typedef enum {
   ND_LT,        // <
   ND_LE,        // <=
   ND_ASSIGN,    // =
+  ND_COMMA,     // ,
+  ND_MEMBER,    // . (struct member access)
   ND_ADDR,      // unary &
   ND_DEREF,     // unary *
   ND_RETURN,    // "return"
@@ -125,6 +130,9 @@ struct Node {
   // Block or statement expression
   Node *body;
 
+  // Struct member access
+  Member *member;
+
   // Function call
   char *funcname;
   Node *args;
@@ -145,11 +153,13 @@ typedef enum {
   TY_PTR,
   TY_FUNC,
   TY_ARRAY,
+  TY_STRUCT,
 } TypeKind;
 
 struct Type {
   TypeKind kind;
-  int size; // sizeof() value
+  int size;  // sizeof() value
+  int align; // alignment
 
   // Pointer
   Type *base;
@@ -160,10 +170,21 @@ struct Type {
   // Array
   int array_len;
 
+  // Struct
+  Member *members;
+
   // Function type
   Type *return_ty;
   Type *params;
   Type *next;
+};
+
+// Struct member
+struct Member {
+  Member *next;
+  Type *ty;
+  Token *name;
+  int offset;
 };
 
 extern Type *ty_char;
@@ -181,3 +202,4 @@ void add_type(Node *node);
 //
 
 void codegen(Obj *prog, FILE *out);
+int align_to(int n, int align);

@@ -35,9 +35,7 @@ static void pop(char *arg) {
 
 // Round up `n` to the nearest multiple of `align`. For instance,
 // align_to(5, 8) returns 8 and align_to(11, 8) returns 16.
-static int align_to(int n, int align) {
-  return (n + align - 1) / align * align;
-}
+int align_to(int n, int align) { return (n + align - 1) / align * align; }
 
 // Compute the absolute address of a given node.
 // It's an error if a given node does not reside in memory.
@@ -55,6 +53,16 @@ static void gen_addr(Node *node) {
 
   case ND_DEREF:
     gen_expr(node->lhs);
+    return;
+
+  case ND_COMMA:
+    gen_expr(node->lhs);
+    gen_addr(node->rhs);
+    return;
+
+  case ND_MEMBER:
+    gen_addr(node->lhs);
+    println("	add $%d, %%rax", node->member->offset);
     return;
   }
 
@@ -84,6 +92,8 @@ static void store(Type *ty) {
 }
 
 static void gen_expr(Node *node) {
+  println("  .loc 1 %d", node->tok->line_no);
+
   switch (node->kind) {
   case ND_NUM:
     println("  mov $%d, %%rax", node->val);
@@ -95,6 +105,7 @@ static void gen_expr(Node *node) {
     return;
 
   case ND_VAR:
+  case ND_MEMBER:
     gen_addr(node);
     load(node->ty);
     return;
@@ -118,6 +129,11 @@ static void gen_expr(Node *node) {
   case ND_STMT_EXPR:
     for (Node *n = node->body; n; n = n->next)
       gen_stmt(n);
+    return;
+
+  case ND_COMMA:
+    gen_expr(node->lhs);
+    gen_expr(node->rhs);
     return;
 
   case ND_FUNCALL: {
@@ -183,6 +199,8 @@ static void gen_expr(Node *node) {
 }
 
 static void gen_stmt(Node *node) {
+  println("  .loc 1 %d", node->tok->line_no);
+
   switch (node->kind) {
   case ND_IF: {
     int c = count();
@@ -243,6 +261,7 @@ static void assign_lvar_offsets(Obj *prog) {
     int offset = 0;
     for (Obj *var = fn->locals; var; var = var->next) {
       offset += var->ty->size;
+      offset = align_to(offset, var->ty->align);
       var->offset = -offset;
     }
     fn->stack_size = align_to(offset, 16);
