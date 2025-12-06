@@ -42,6 +42,9 @@ static Obj *globals;
 
 static Scope *scope = &(Scope){};
 
+// Points to the function object the parser is currently parsing.
+static Obj *current_fn;
+
 static bool is_typename(Token *tok);
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
 static Type *declarator(Token **rest, Token *tok, Type *ty);
@@ -55,6 +58,7 @@ static Node *equality(Token **rest, Token *tok);
 static Node *relational(Token **rest, Token *tok);
 static Node *add(Token **rest, Token *tok);
 static Node *mul(Token **rest, Token *tok);
+static Node *cast(Token **rest, Token *tok);
 static Type *struct_decl(Token **rest, Token *tok);
 static Type *union_decl(Token **rest, Token *tok);
 static Node *postfix(Token **rest, Token *tok);
@@ -114,9 +118,27 @@ static Node *new_num(int64_t val, Token *tok) {
   return node;
 }
 
+static Node *new_long(int64_t val, Token *tok) {
+  Node *node = new_num(ND_NUM, tok);
+  node->val = val;
+  node->ty = ty_long;
+  return node;
+}
+
 static Node *new_var_node(Obj *var, Token *tok) {
   Node *node = new_node(ND_VAR, tok);
   node->var = var;
+  return node;
+}
+
+Node *new_cast(Node *expr, Type *ty) {
+  add_type(expr);
+
+  Node *node = calloc(1, sizeof(Node));
+  node->kind = ND_CAST;
+  node->tok = expr->tok;
+  node->lhs = expr;
+  node->ty = copy_type(ty);
   return node;
 }
 
@@ -193,17 +215,18 @@ static void push_tag_scope(Token *tok, Type *ty) {
   scope->tags = sc;
 }
 
-// declspec = ("void" | "char" | "short" | "int" | "long"
+// declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
 //             | "typedef"
 //             | struct-decl | union-decl | typedef-name)+
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   enum {
     VOID = 1 << 0,
-    CHAR = 1 << 2,
-    SHORT = 1 << 4,
-    INT = 1 << 6,
-    LONG = 1 << 8,
-    OTHER = 1 << 10,
+    BOOL = 1 << 2,
+    CHAR = 1 << 4,
+    SHORT = 1 << 6,
+    INT = 1 << 8,
+    LONG = 1 << 10,
+    OTHER = 1 << 12,
   };
 
   Type *ty = ty_int;
@@ -244,6 +267,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       counter += VOID;
     else if (equal(tok, "char"))
       counter += CHAR;
+    else if (equal(tok, "_Bool"))
+      counter += BOOL;
     else if (equal(tok, "short"))
       counter += SHORT;
     else if (equal(tok, "int"))
@@ -256,6 +281,9 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     switch (counter) {
     case VOID:
       ty = ty_void;
+      break;
+    case BOOL:
+      ty = ty_bool;
       break;
     case CHAR:
       ty = ty_char;
@@ -406,7 +434,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety) {
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
   static char *kw[] = {
-      "void", "char", "short", "int", "long", "struct", "union", "typedef",
+      "void", "_Bool",  "char",  "short",   "int",
+      "long", "struct", "union", "typedef",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i)
@@ -425,8 +454,11 @@ static bool is_typename(Token *tok) {
 static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "return")) {
     Node *node = new_node(ND_RETURN, tok);
-    node->lhs = expr(&tok, tok->next);
+    Node *exp = expr(&tok, tok->next);
     *rest = skip(tok, ";");
+
+    add_type(exp);
+    node->lhs = new_cast(exp, current_fn->ty->return_ty);
     return node;
   }
 
@@ -616,7 +648,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
   }
 
   // ptr + num
-  rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
+  rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
   return new_binary(ND_ADD, lhs, rhs, tok);
 }
 
@@ -630,7 +662,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
 
   // ptr - num
   if (lhs->ty->base && is_integer(rhs->ty)) {
-    rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
+    rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
     add_type(rhs);
     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
     node->ty = lhs->ty;
@@ -669,20 +701,20 @@ static Node *add(Token **rest, Token *tok) {
   }
 }
 
-// mul = unary ("*" unary | "/" unary)*
+// mul = cast ("*" cast | "/" cast)*
 static Node *mul(Token **rest, Token *tok) {
-  Node *node = unary(&tok, tok);
+  Node *node = cast(&tok, tok);
 
   while (true) {
     Token *start = tok;
 
     if (equal(tok, "*")) {
-      node = new_binary(ND_MUL, node, unary(&tok, tok->next), start);
+      node = new_binary(ND_MUL, node, cast(&tok, tok->next), start);
       continue;
     }
 
     if (equal(tok, "/")) {
-      node = new_binary(ND_DIV, node, unary(&tok, tok->next), start);
+      node = new_binary(ND_DIV, node, cast(&tok, tok->next), start);
       continue;
     }
 
@@ -691,20 +723,34 @@ static Node *mul(Token **rest, Token *tok) {
   }
 }
 
-// unary = ("+" | "-" | "*" | "&") unary
+// cast = "(" type-name ")" cast | unary
+static Node *cast(Token **rest, Token *tok) {
+  if (equal(tok, "(") && is_typename(tok->next)) {
+    Token *start = tok;
+    Type *ty = typename(&tok, tok->next);
+    tok = skip(tok, ")");
+    Node *node = new_cast(cast(rest, tok), ty);
+    node->tok = start;
+    return node;
+  }
+
+  return unary(rest, tok);
+}
+
+// unary = ("+" | "-" | "*" | "&") cast
 //       | postfix
 static Node *unary(Token **rest, Token *tok) {
   if (equal(tok, "+"))
-    return unary(rest, tok->next);
+    return cast(rest, tok->next);
 
   if (equal(tok, "-"))
-    return new_unary(ND_NEG, unary(rest, tok->next), tok);
+    return new_unary(ND_NEG, cast(rest, tok->next), tok);
 
   if (equal(tok, "&"))
-    return new_unary(ND_ADDR, unary(rest, tok->next), tok);
+    return new_unary(ND_ADDR, cast(rest, tok->next), tok);
 
   if (equal(tok, "*"))
-    return new_unary(ND_DEREF, unary(rest, tok->next), tok);
+    return new_unary(ND_DEREF, cast(rest, tok->next), tok);
 
   return postfix(rest, tok);
 }
@@ -855,19 +901,41 @@ static Node *funcall(Token **rest, Token *tok) {
   Token *start = tok;
   tok = tok->next->next;
 
+  VarScope *sc = find_var(start);
+  if (!sc)
+    error_tok(start, "implicit declaration of a function");
+  if (!sc->var || sc->var->ty->kind != TY_FUNC)
+    error_tok(start, "not a function");
+
+  Type *ty = sc->var->ty;
+  Type *param_ty = ty->params;
+
   Node head = {};
   Node *cur = &head;
 
   while (!equal(tok, ")")) {
     if (cur != &head)
       tok = skip(tok, ",");
-    cur = cur->next = assign(&tok, tok);
+
+    Node *arg = assign(&tok, tok);
+    add_type(arg);
+
+    if (param_ty) {
+      if (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION)
+        error_tok(arg->tok, "passing struct or union is not supported yet");
+      arg = new_cast(arg, param_ty);
+      param_ty = param_ty->next;
+    }
+
+    cur = cur->next = arg;
   }
 
   *rest = skip(tok, ")");
 
   Node *node = new_node(ND_FUNCALL, start);
   node->funcname = get_ident(start);
+  node->func_ty = ty;
+  node->ty = ty->return_ty;
   node->args = head.next;
   return node;
 }
@@ -967,6 +1035,7 @@ static Token *function(Token *tok, Type *basety) {
   if (!fn->is_definition)
     return tok;
 
+  current_fn = fn;
   locals = NULL;
   enter_scope();
   create_param_lvars(ty->params);

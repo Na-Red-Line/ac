@@ -78,9 +78,9 @@ static void load(Type *ty) {
   }
 
   if (ty->size == 1)
-    println("	movsbq (%%rax), %%rax");
+    println("  movsbl (%%rax), %%eax");
   else if (ty->size == 2)
-    println("	movswq (%%rax), %%rax");
+    println("  movswl (%%rax), %%eax");
   else if (ty->size == 4)
     println("	movsxd (%%rax), %%rax");
   else
@@ -107,6 +107,55 @@ static void store(Type *ty) {
     println("	mov %%eax, (%%rdi)");
   else
     println("  mov %%rax, (%%rdi)");
+}
+
+static void cmp_zero(Type *ty) {
+  if (is_integer(ty) && ty->size <= 4)
+    println("	cmp $0, %%eax");
+  else
+    println("	cmp $0, %%rax");
+}
+
+enum { I8, I16, I32, I64 };
+
+static int getTypeId(Type *ty) {
+  switch (ty->kind) {
+  case TY_CHAR:
+    return I8;
+  case TY_SHORT:
+    return I16;
+  case TY_INT:
+    return I32;
+  }
+  return I64;
+}
+
+// The table for type casts
+static char i32i8[] = "movsbl %al, %eax";
+static char i32i16[] = "movswl %ax, %eax";
+static char i32i64[] = "movsxd %eax, %rax";
+
+static char *cast_table[][10] = {
+    {NULL, NULL, NULL, i32i64},    // i8
+    {i32i8, NULL, NULL, i32i64},   // i16
+    {i32i8, i32i16, NULL, i32i64}, // i32
+    {i32i8, i32i16, NULL, NULL},   // i64
+};
+
+static void cast(Type *from, Type *to) {
+  if (to->kind == TY_VOID)
+    return;
+
+  if (to->kind == TY_BOOL) {
+    cmp_zero(from);
+    println("  setne %%al");
+    println("  movzx %%al, %%eax");
+  }
+
+  int t1 = getTypeId(from);
+  int t2 = getTypeId(to);
+  if (cast_table[t1][t2])
+    println("  %s", cast_table[t1][t2]);
 }
 
 static void gen_expr(Node *node) {
@@ -154,6 +203,11 @@ static void gen_expr(Node *node) {
     gen_expr(node->rhs);
     return;
 
+  case ND_CAST:
+    gen_expr(node->lhs);
+    cast(node->lhs->ty, node->ty);
+    return;
+
   case ND_FUNCALL: {
     int nargs = 0;
     for (Node *arg = node->args; arg; arg = arg->next) {
@@ -176,29 +230,42 @@ static void gen_expr(Node *node) {
   gen_expr(node->lhs);
   pop("%rdi");
 
+  char *ax, *di;
+
+  if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->base) {
+    ax = "%rax";
+    di = "%rdi";
+  } else {
+    ax = "%eax";
+    di = "%edi";
+  }
+
   switch (node->kind) {
   case ND_ADD:
-    println("  add %%rdi, %%rax");
+    println("  add %s, %s", di, ax);
     return;
 
   case ND_SUB:
-    println("  sub %%rdi, %%rax");
+    println("  sub %s, %s", di, ax);
     return;
 
   case ND_MUL:
-    println("  imul %%rdi, %%rax");
+    println("  imul %s, %s", di, ax);
     return;
 
   case ND_DIV:
-    println("  cqo");
-    println("  idiv %%rdi");
+    if (node->lhs->ty->size == 8)
+      println("	cqo");
+    else
+      println("	cdq");
+    println("  idiv %s", di);
     return;
 
   case ND_EQ:
   case ND_NE:
   case ND_LT:
   case ND_LE:
-    println("  cmp %%rdi, %%rax");
+    println("  cmp %s, %s", di, ax);
 
     if (node->kind == ND_EQ)
       println("  sete %%al");

@@ -47,7 +47,7 @@ struct Token {
   int line_no; // Line number
 };
 
-_Noreturn void error(char *fmt, ...);
+void error(char *fmt, ...);
 _Noreturn void error_at(char *loc, char *fmt, ...);
 _Noreturn void error_tok(Token *tok, char *fmt, ...);
 bool equal(Token *tok, char *op);
@@ -112,6 +112,7 @@ typedef enum {
   ND_STMT_EXPR, // Statement expression
   ND_VAR,       // Variable
   ND_NUM,       // Integer
+  ND_CAST,      // Type cast
 } NodeKind;
 
 // AST node type
@@ -139,12 +140,14 @@ struct Node {
 
   // Function call
   char *funcname;
+  Type *func_ty;
   Node *args;
 
   Obj *var;    // Used if kind == ND_VAR
   int64_t val; // Used if kind == ND_NUM
 };
 
+Node *new_cast(Node *expr, Type *ty);
 Obj *parse(Token *tok);
 
 //
@@ -153,6 +156,7 @@ Obj *parse(Token *tok);
 
 typedef enum {
   TY_VOID,
+  TY_BOOL,
   TY_CHAR,
   TY_SHORT,
   TY_INT,
@@ -196,6 +200,7 @@ struct Member {
 };
 
 extern Type *ty_void;
+extern Type *ty_bool;
 
 extern Type *ty_char;
 extern Type *ty_short;

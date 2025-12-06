@@ -15,11 +15,11 @@ _Noreturn void error(char *fmt, ...) {
   exit(1);
 }
 
-// Reports an error message in the following format and exit.
+// Reports an error message in the following format.
 //
 // foo.c:10: x = y + 1;
 //               ^ <error message here>
-_Noreturn static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
   // Find a line containing `loc`.
   char *line = loc;
   while (current_input < line && line[-1] != '\n')
@@ -40,7 +40,6 @@ _Noreturn static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
   fprintf(stderr, "^ ");
   vfprintf(stderr, fmt, ap);
   fprintf(stderr, "\n");
-  exit(1);
 }
 
 _Noreturn void error_at(char *loc, char *fmt, ...) {
@@ -52,12 +51,14 @@ _Noreturn void error_at(char *loc, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(line_no, loc, fmt, ap);
+  exit(1);
 }
 
 _Noreturn void error_tok(Token *tok, char *fmt, ...) {
   va_list ap;
   va_start(ap, fmt);
   verror_at(tok->line_no, tok->loc, fmt, ap);
+  exit(1);
 }
 
 // Consumes the current token if it matches `op`.
@@ -125,8 +126,8 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
   static char *kw[] = {
-      "return", "if",     "else",  "for",   "while", "int",  "sizeof",
-      "char",   "struct", "union", "short", "long",  "void", "typedef",
+      "return", "if",    "else",  "for",  "while", "int",     "sizeof", "char",
+      "struct", "union", "short", "long", "void",  "typedef", "_Bool",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -285,14 +286,6 @@ static Token *tokenize(char *filename, char *p) {
       continue;
     }
 
-    // Punctuators
-    int punct_len = read_punct(p);
-    if (punct_len) {
-      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len);
-      p += cur->len;
-      continue;
-    }
-
     // Identifier or keyword
     if (is_ident1(*p)) {
       char *start = p;
@@ -300,6 +293,14 @@ static Token *tokenize(char *filename, char *p) {
         p++;
       } while (is_ident2(*p));
       cur = cur->next = new_token(TK_IDENT, start, p);
+      continue;
+    }
+
+    // Punctuators
+    int punct_len = read_punct(p);
+    if (punct_len) {
+      cur = cur->next = new_token(TK_PUNCT, p, p + punct_len);
+      p += cur->len;
       continue;
     }
 
