@@ -4,6 +4,8 @@ static FILE *output_file;
 
 static int depth;
 static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
+static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
+static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
 static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
 static Obj *current_fn;
 
@@ -71,12 +73,16 @@ static void gen_addr(Node *node) {
 
 // Load a value from where %rax is pointing to.
 static void load(Type *ty) {
-  if (ty->kind == TY_ARRAY) {
+  if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
     return;
   }
 
   if (ty->size == 1)
     println("	movsbq (%%rax), %%rax");
+  else if (ty->size == 2)
+    println("	movswq (%%rax), %%rax");
+  else if (ty->size == 4)
+    println("	movsxd (%%rax), %%rax");
   else
     println("  mov (%%rax), %%rax");
 }
@@ -85,8 +91,20 @@ static void load(Type *ty) {
 static void store(Type *ty) {
   pop("%rdi");
 
+  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    for (int i = 0; i < ty->size; ++i) {
+      println("	mov %d(%%rax), %%r8b", i);
+      println("	mov %%r8b, %d(%%rdi)", i);
+    }
+    return;
+  }
+
   if (ty->size == 1)
     println("	mov %%al, (%%rdi)");
+  else if (ty->size == 2)
+    println("  mov %%ax, (%%rdi)");
+  else if (ty->size == 4)
+    println("	mov %%eax, (%%rdi)");
   else
     println("  mov %%rax, (%%rdi)");
 }
@@ -96,7 +114,7 @@ static void gen_expr(Node *node) {
 
   switch (node->kind) {
   case ND_NUM:
-    println("  mov $%d, %%rax", node->val);
+    println("  mov $%ld, %%rax", node->val);
     return;
 
   case ND_NEG:
@@ -286,9 +304,27 @@ static void emit_data(Obj *prog) {
   }
 }
 
+static void store_gp(int r, int offset, int sz) {
+  switch (sz) {
+  case 1:
+    println("  mov %s, %d(%%rbp)", argreg8[r], offset);
+    return;
+  case 2:
+    println("  mov %s, %d(%%rbp)", argreg16[r], offset);
+    return;
+  case 4:
+    println("  mov %s, %d(%%rbp)", argreg32[r], offset);
+    return;
+  case 8:
+    println("  mov %s, %d(%%rbp)", argreg64[r], offset);
+    return;
+  }
+  unreachable();
+}
+
 static void emit_text(Obj *prog) {
   for (Obj *fn = prog; fn; fn = fn->next) {
-    if (!fn->is_function)
+    if (!fn->is_function || !fn->is_definition)
       continue;
 
     println("  .globl %s", fn->name);
@@ -303,12 +339,8 @@ static void emit_text(Obj *prog) {
 
     // Save passed-by-register arguments to the stack
     int i = 0;
-    for (Obj *var = fn->params; var; var = var->next) {
-      if (var->ty->size == 1)
-        println("  mov %s, %d(%%rbp)", argreg8[i++], var->offset);
-      else
-        println("  mov %s, %d(%%rbp)", argreg64[i++], var->offset);
-    }
+    for (Obj *var = fn->params; var; var = var->next)
+      store_gp(i++, var->offset, var->ty->size);
 
     // Emit code
     gen_stmt(fn->body);

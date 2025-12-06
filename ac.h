@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdarg.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,7 +38,7 @@ typedef struct Token Token;
 struct Token {
   TokenKind kind; // Token kind
   Token *next;    // Next token
-  int val;        // If kind is TK_NUM, its value
+  int64_t val;    // If kind is TK_NUM, its value
   char *loc;      // Token location
   int len;        // Token length
   Type *ty;       // Used if TK_STR
@@ -53,6 +54,8 @@ bool equal(Token *tok, char *op);
 Token *skip(Token *tok, char *op);
 bool consume(Token **rest, Token *tok, char *str);
 Token *tokenize_file(char *filename);
+
+#define unreachable() error("internal error at %s:%d", __FILE__, __LINE__)
 
 //
 // parse.c
@@ -72,6 +75,7 @@ struct Obj {
 
   // Global variable or function
   bool is_function;
+  bool is_definition;
 
   // Global variable
   char *init_data;
@@ -137,8 +141,8 @@ struct Node {
   char *funcname;
   Node *args;
 
-  Obj *var; // Used if kind == ND_VAR
-  int val;  // Used if kind == ND_NUM
+  Obj *var;    // Used if kind == ND_VAR
+  int64_t val; // Used if kind == ND_NUM
 };
 
 Obj *parse(Token *tok);
@@ -148,12 +152,16 @@ Obj *parse(Token *tok);
 //
 
 typedef enum {
+  TY_VOID,
   TY_CHAR,
+  TY_SHORT,
   TY_INT,
+  TY_LONG,
   TY_PTR,
   TY_FUNC,
   TY_ARRAY,
   TY_STRUCT,
+  TY_UNION,
 } TypeKind;
 
 struct Type {
@@ -187,8 +195,12 @@ struct Member {
   int offset;
 };
 
+extern Type *ty_void;
+
 extern Type *ty_char;
+extern Type *ty_short;
 extern Type *ty_int;
+extern Type *ty_long;
 
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);
