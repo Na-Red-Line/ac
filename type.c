@@ -19,7 +19,7 @@ static Type *new_type(TypeKind kind, int size, int align) {
 bool is_integer(Type *ty) {
   TypeKind k = ty->kind;
   return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT ||
-         k == TY_LONG;
+         k == TY_LONG || k == TY_ENUM;
 }
 
 Type *copy_type(Type *ty) {
@@ -47,6 +47,8 @@ Type *array_of(Type *base, int len) {
   ty->array_len = len;
   return ty;
 }
+
+Type *enum_type(void) { return new_type(TY_ENUM, 4, 4); }
 
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
@@ -89,6 +91,10 @@ void add_type(Node *node) {
   case ND_SUB:
   case ND_MUL:
   case ND_DIV:
+  case ND_MOD:
+  case ND_BITAND:
+  case ND_BITOR:
+  case ND_BITXOR:
     usual_arith_conv(&node->lhs, &node->rhs);
     node->ty = node->lhs->ty;
     return;
@@ -118,6 +124,16 @@ void add_type(Node *node) {
 
   case ND_FUNCALL:
     node->ty = ty_long;
+    return;
+
+  case ND_NOT:
+  case ND_LOGOR:
+  case ND_LOGAND:
+    node->ty = ty_int;
+    return;
+
+  case ND_BITNOT:
+    node->ty = node->lhs->ty;
     return;
 
   case ND_VAR:

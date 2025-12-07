@@ -208,6 +208,50 @@ static void gen_expr(Node *node) {
     cast(node->lhs->ty, node->ty);
     return;
 
+  case ND_NOT:
+    gen_expr(node->lhs);
+    println("	cmp $0, %%rax");
+    println("	sete %%al");
+    println("	movzx %%al, %%rax");
+    return;
+
+  case ND_BITNOT:
+    gen_expr(node->lhs);
+    println("  not %%rax");
+    return;
+
+  case ND_LOGAND: {
+    int c = count();
+    gen_expr(node->lhs);
+    println("  cmp $0, %%rax");
+    println("  je .L.false.%d", c);
+    gen_expr(node->rhs);
+    println("  cmp $0, %%rax");
+    println("  je .L.false.%d", c);
+    println("  mov $1, %%rax");
+    println("  jmp .L.end.%d", c);
+    println(".L.false.%d:", c);
+    println("  mov $0, %%rax");
+    println(".L.end.%d:", c);
+    return;
+  }
+
+  case ND_LOGOR: {
+    int c = count();
+    gen_expr(node->lhs);
+    println("  cmp $0, %%rax");
+    println("  jne .L.true.%d", c);
+    gen_expr(node->rhs);
+    println("  cmp $0, %%rax");
+    println("  jne .L.true.%d", c);
+    println("  mov $0, %%rax");
+    println("  jmp .L.end.%d", c);
+    println(".L.true.%d:", c);
+    println("  mov $1, %%rax");
+    println(".L.end.%d:", c);
+    return;
+  }
+
   case ND_FUNCALL: {
     int nargs = 0;
     for (Node *arg = node->args; arg; arg = arg->next) {
@@ -254,11 +298,25 @@ static void gen_expr(Node *node) {
     return;
 
   case ND_DIV:
+  case ND_MOD:
     if (node->lhs->ty->size == 8)
       println("	cqo");
     else
       println("	cdq");
     println("  idiv %s", di);
+
+    if (node->kind == ND_MOD)
+      println("  mov %%rdx, %%rax");
+    return;
+
+  case ND_BITAND:
+    println("  and %%rdi, %%rax");
+    return;
+  case ND_BITOR:
+    println("  or %%rdi, %%rax");
+    return;
+  case ND_BITXOR:
+    println("  xor %%rdi, %%rax");
     return;
 
   case ND_EQ:
@@ -394,7 +452,11 @@ static void emit_text(Obj *prog) {
     if (!fn->is_function || !fn->is_definition)
       continue;
 
-    println("  .globl %s", fn->name);
+    if (fn->is_static)
+      println("	.local %s", fn->name);
+    else
+      println("  .globl %s", fn->name);
+
     println("  .text");
     println("%s:", fn->name);
     current_fn = fn;

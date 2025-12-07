@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 typedef struct Type Type;
 typedef struct Node Node;
@@ -76,6 +77,7 @@ struct Obj {
   // Global variable or function
   bool is_function;
   bool is_definition;
+  bool is_static;
 
   // Global variable
   char *init_data;
@@ -94,6 +96,10 @@ typedef enum {
   ND_MUL,       // *
   ND_DIV,       // /
   ND_NEG,       // unary -
+  ND_MOD,       // %
+  ND_BITAND,    // &
+  ND_BITOR,     // |
+  ND_BITXOR,    // ^
   ND_EQ,        // ==
   ND_NE,        // !=
   ND_LT,        // <
@@ -103,6 +109,10 @@ typedef enum {
   ND_MEMBER,    // . (struct member access)
   ND_ADDR,      // unary &
   ND_DEREF,     // unary *
+  ND_NOT,       // !
+  ND_BITNOT,    // ~
+  ND_LOGAND,    // &&
+  ND_LOGOR,     // ||
   ND_RETURN,    // "return"
   ND_IF,        // "if"
   ND_FOR,       // "for" or "while"
@@ -161,6 +171,7 @@ typedef enum {
   TY_SHORT,
   TY_INT,
   TY_LONG,
+  TY_ENUM,
   TY_PTR,
   TY_FUNC,
   TY_ARRAY,
@@ -212,6 +223,7 @@ Type *copy_type(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);
 Type *array_of(Type *base, int size);
+Type *enum_type(void);
 void add_type(Node *node);
 
 //

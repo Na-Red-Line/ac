@@ -105,7 +105,10 @@ static bool is_ident2(char c) { return is_ident1(c) || ('0' <= c && c <= '9'); }
 
 // Read a punctuator token from p and returns its length.
 static int read_punct(char *p) {
-  static char *kw[] = {"==", "!=", "<=", ">=", "->"};
+  static char *kw[] = {
+      "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
+      "++", "--", "%=", "&=", "|=", "^=", "&&", "||",
+  };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); ++i)
     if (startswith(p, kw[i]))
@@ -126,8 +129,9 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
   static char *kw[] = {
-      "return", "if",    "else",  "for",  "while", "int",     "sizeof", "char",
-      "struct", "union", "short", "long", "void",  "typedef", "_Bool",
+      "return", "if",      "else",   "for",   "while",  "int",
+      "sizeof", "char",    "struct", "union", "short",  "long",
+      "void",   "typedef", "_Bool",  "enum",  "static",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -218,6 +222,50 @@ static Token *read_string_literal(char *start) {
   return tok;
 }
 
+static Token *read_char_literal(char *start) {
+  char *p = start + 1;
+  if (*p == '\0')
+    error_at(start, "unclosed char literal");
+
+  char c;
+  if (*p == '\\')
+    c = read_escaped_char(&p, p + 1);
+  else
+    c = *p++;
+
+  char *end = strchr(p, '\'');
+  if (!end)
+    error_at(p, "unclosed char literal");
+
+  Token *tok = new_token(TK_NUM, start, end + 1);
+  tok->val = c;
+  return tok;
+}
+
+static Token *read_int_literal(char *start) {
+  char *p = start;
+
+  int base = 10;
+  if (!strncasecmp(p, "0x", 2) && isalnum(p[2])) {
+    p += 2;
+    base = 16;
+  } else if (!strncasecmp(p, "0b", 2) && isalnum(p[2])) {
+    p += 2;
+    base = 2;
+  } else if (*p == '0') {
+    base = 8;
+  }
+
+  long val = strtoul(p, &p, base);
+
+  if (isalnum(*p))
+    error_at(p, "invalid digit");
+
+  Token *tok = new_token(TK_NUM, start, p);
+  tok->val = val;
+  return tok;
+}
+
 static void convert_keywords(Token *tok) {
   for (Token *t = tok; t->kind != TK_EOF; t = t->next)
     if (is_keyword(t))
@@ -272,16 +320,21 @@ static Token *tokenize(char *filename, char *p) {
 
     // Numeric literal
     if (isdigit(*p)) {
-      cur = cur->next = new_token(TK_NUM, p, p);
-      char *q = p;
-      cur->val = strtoul(p, &p, 10);
-      cur->len = p - q;
+      cur = cur->next = read_int_literal(p);
+      p += cur->len;
       continue;
     }
 
     // String literal
     if (*p == '"') {
       cur = cur->next = read_string_literal(p);
+      p += cur->len;
+      continue;
+    }
+
+    // Character literal
+    if (*p == '\'') {
+      cur = cur->next = read_char_literal(p);
       p += cur->len;
       continue;
     }
