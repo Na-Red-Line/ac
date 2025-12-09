@@ -367,19 +367,50 @@ static void gen_stmt(Node *node) {
     if (node->cond) {
       gen_expr(node->cond);
       println("	cmp $0, %%rax");
-      println("	je	.L.end.%d", c);
+      println("	je	%s", node->brk_label);
     }
     gen_stmt(node->then);
     if (node->inc)
       gen_expr(node->inc);
     println("	jmp	.L.begin.%d", c);
-    println(".L.end.%d:", c);
+    println("%s:", node->brk_label);
     return;
   }
+
+  case ND_SWITCH:
+    gen_expr(node->cond);
+
+    for (Node *n = node->case_next; n; n = n->case_next) {
+      char *reg = (node->cond->ty->size == 8) ? "%rax" : "%eax";
+      println("  cmp $%ld, %s", n->val, reg);
+      println("  je %s", n->label);
+    }
+
+    if (node->default_case)
+      println("  jmp %s", node->default_case->label);
+
+    println("  jmp %s", node->brk_label);
+    gen_stmt(node->then);
+    println("%s:", node->brk_label);
+    return;
+
+  case ND_CASE:
+    println("%s:", node->label);
+    gen_stmt(node->lhs);
+    return;
 
   case ND_BLOCK:
     for (Node *n = node->body; n; n = n->next)
       gen_stmt(n);
+    return;
+
+  case ND_GOTO:
+    println("	jmp %s", node->unique_label);
+    return;
+
+  case ND_LABEL:
+    println("%s:", node->unique_label);
+    gen_stmt(node->lhs);
     return;
 
   case ND_RETURN:

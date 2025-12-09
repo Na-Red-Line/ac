@@ -37,6 +37,28 @@ int main() {
   ASSERT(0, (2-2)&&5);
   ASSERT(1, 1&&5);
 
+  ASSERT(3, ({ int i=0; goto a; a: i++; b: i++; c: i++; i; }));
+  ASSERT(2, ({ int i=0; goto e; d: i++; e: i++; f: i++; i; }));
+  ASSERT(1, ({ int i=0; goto i; g: i++; h: i++; i: i++; i; }));
+
+  ASSERT(1, ({ typedef int foo; goto foo; foo:; 1; }));
+
+  ASSERT(3, ({ int i=0; for(;i<10;i++) { if (i == 3) break; } i; }));
+  ASSERT(4, ({ int i=0; while (1) { if (i++ == 3) break; } i; }));
+  ASSERT(3, ({ int i=0; for(;i<10;i++) { for (;;) break; if (i == 3) break; } i; }));
+  ASSERT(4, ({ int i=0; while (1) { while(1) break; if (i++ == 3) break; } i; }));
+
+  ASSERT(5, ({ int i=0; switch(0) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
+  ASSERT(6, ({ int i=0; switch(1) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
+  ASSERT(7, ({ int i=0; switch(2) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
+  ASSERT(0, ({ int i=0; switch(3) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
+  ASSERT(5, ({ int i=0; switch(0) { case 0:i=5;break; default:i=7; } i; }));
+  ASSERT(7, ({ int i=0; switch(1) { case 0:i=5;break; default:i=7; } i; }));
+  ASSERT(2, ({ int i=0; switch(1) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }));
+  ASSERT(0, ({ int i=0; switch(3) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }));
+
+  ASSERT(3, ({ int i=0; switch(-1) { case 0xffffffff: i=3; break; } i; }));
+
   printf("OK\n");
   return 0;
 }

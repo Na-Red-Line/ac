@@ -129,9 +129,10 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
   static char *kw[] = {
-      "return", "if",      "else",   "for",   "while",  "int",
-      "sizeof", "char",    "struct", "union", "short",  "long",
-      "void",   "typedef", "_Bool",  "enum",  "static",
+      "return", "if",      "else",   "for",     "while",  "int",
+      "sizeof", "char",    "struct", "union",   "short",  "long",
+      "void",   "typedef", "_Bool",  "enum",    "static", "goto",
+      "break",  "switch",  "case",   "default",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
