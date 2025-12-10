@@ -92,7 +92,7 @@ static void store(Type *ty) {
   pop("%rdi");
 
   if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
-    for (int i = 0; i < ty->size; ++i) {
+    for (int i = 0; i < ty->size; i++) {
       println("	mov %d(%%rax), %%r8b", i);
       println("	mov %%r8b, %d(%%rdi)", i);
     }
@@ -162,6 +162,9 @@ static void gen_expr(Node *node) {
   println("  .loc 1 %d", node->tok->line_no);
 
   switch (node->kind) {
+  case ND_NULL_EXPR:
+    return;
+
   case ND_NUM:
     println("  mov $%ld, %%rax", node->val);
     return;
@@ -207,6 +210,27 @@ static void gen_expr(Node *node) {
     gen_expr(node->lhs);
     cast(node->lhs->ty, node->ty);
     return;
+
+  case ND_MEMZERO:
+    // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`.
+    println("  mov $%d, %%rcx", node->var->ty->size);
+    println("  lea %d(%%rbp), %%rdi", node->var->offset);
+    println("  mov $0, %%al");
+    println("  rep stosb");
+    return;
+
+  case ND_COND: {
+    int c = count();
+    gen_expr(node->cond);
+    println("	cmp $0, %%rax");
+    println("	je .L.else.%d", c);
+    gen_expr(node->then);
+    println("	jmp .L.end.d%d", c);
+    println(".L.else.%d:", c);
+    gen_expr(node->els);
+    println(".L.end.d%d:", c);
+    return;
+  }
 
   case ND_NOT:
     gen_expr(node->lhs);
@@ -335,6 +359,19 @@ static void gen_expr(Node *node) {
       println("  setle %%al");
 
     println("  movzb %%al, %%rax");
+    return;
+
+  case ND_SHL:
+    println("  mov %%rdi, %%rcx");
+    println("  shl %%cl, %s", ax);
+    return;
+
+  case ND_SHR:
+    println("  mov %%rdi, %%rcx");
+    if (node->ty->size == 8)
+      println("  sar %%cl, %s", ax);
+    else
+      println("  sar %%cl, %s", ax);
     return;
   }
 

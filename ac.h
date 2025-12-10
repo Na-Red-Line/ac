@@ -91,6 +91,7 @@ struct Obj {
 
 // AST node
 typedef enum {
+  ND_NULL_EXPR, // Do nothing
   ND_ADD,       // +
   ND_SUB,       // -
   ND_MUL,       // *
@@ -100,11 +101,14 @@ typedef enum {
   ND_BITAND,    // &
   ND_BITOR,     // |
   ND_BITXOR,    // ^
+  ND_SHL,       // <<
+  ND_SHR,       // >>
   ND_EQ,        // ==
   ND_NE,        // !=
   ND_LT,        // <
   ND_LE,        // <=
   ND_ASSIGN,    // =
+  ND_COND,      // ?:
   ND_COMMA,     // ,
   ND_MEMBER,    // . (struct member access)
   ND_ADDR,      // unary &
@@ -127,6 +131,7 @@ typedef enum {
   ND_VAR,       // Variable
   ND_NUM,       // Integer
   ND_CAST,      // Type cast
+  ND_MEMZERO,   // Zero-clear a stack variable
 } NodeKind;
 
 // AST node type

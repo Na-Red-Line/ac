@@ -96,6 +96,32 @@ int main() {
   ASSERT(7, ({ int i=6; i|=3; i; }));
   ASSERT(10, ({ int i=15; i^=5; i; }));
 
+  ASSERT(1, 1<<0);
+  ASSERT(8, 1<<3);
+  ASSERT(10, 5<<1);
+  ASSERT(2, 5>>1);
+  ASSERT(-1, -1>>1);
+  ASSERT(1, ({ int i=1; i<<=0; i; }));
+  ASSERT(8, ({ int i=1; i<<=3; i; }));
+  ASSERT(10, ({ int i=5; i<<=1; i; }));
+  ASSERT(2, ({ int i=5; i>>=1; i; }));
+  ASSERT(-1, -1);
+  ASSERT(-1, ({ int i=-1; i; }));
+  ASSERT(-1, ({ int i=-1; i>>=1; i; }));
+
+  ASSERT(2, 0?1:2);
+  ASSERT(1, 1?1:2);
+  ASSERT(-1, 0?-2:-1);
+  ASSERT(-2, 1?-2:-1);
+  ASSERT(4, sizeof(0?1:2));
+  ASSERT(8, sizeof(0?(long)1:(long)2));
+  ASSERT(-1, 0?(long)-2:-1);
+  ASSERT(-1, 0?-2:(long)-1);
+  ASSERT(-2, 1?(long)-2:-1);
+  ASSERT(-2, 1?-2:(long)-1);
+
+  1 ? -2 : (void)-1;
+
 	printf("OK\n");
   return 0;
 }

@@ -10,12 +10,12 @@ static void usage(int status) {
 }
 
 static void parse_args(int argc, char **argv) {
-  for (int i = 1; i < argc; ++i) {
+  for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--help"))
       usage(0);
 
     if (!strcmp(argv[i], "-o")) {
-      if (!argv[++i])
+      if (!argv[i++])
         usage(1);
       opt_o = argv[i];
       continue;
