@@ -60,6 +60,7 @@ typedef struct InitDesg InitDesg;
 struct InitDesg {
   InitDesg *next;
   int idx;
+  Member *member;
   Obj *var;
 };
 
@@ -96,10 +97,14 @@ static void initializer2(Token **rest, Token *tok, Initializer *init);
 static Initializer *initializer(Token **rest, Token *tok, Type *ty,
                                 Type **new_ty);
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
+static void gvar_initializer(Token **rest, Token *tok, Obj *var);
 static Node *compound_stmt(Token **rest, Token *tok);
 static Node *stmt(Token **rest, Token *tok);
 static Node *expr_stmt(Token **rest, Token *tok);
 static Node *expr(Token **rest, Token *tok);
+static int64_t eval(Node *node);
+static int64_t eval2(Node *node, char **label);
+static int64_t eval_rval(Node *node, char **label);
 static Node *assign(Token **rest, Token *tok);
 static Node *logor(Token **rest, Token *tok);
 static int64_t const_expr(Token **rest, Token *tok);
@@ -220,6 +225,20 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
     init->children = calloc(ty->array_len, sizeof(Initializer *));
     for (int i = 0; i < ty->array_len; i++)
       init->children[i] = new_initializer(ty->base, false);
+    return init;
+  }
+
+  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+    // Count the number of struct members.
+    int len = 0;
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      len++;
+
+    init->children = calloc(len, sizeof(Initializer *));
+
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      init->children[mem->idx] = new_initializer(mem->ty, false);
+    return init;
   }
 
   return init;
@@ -616,9 +635,9 @@ static int count_array_init_elements(Token *tok, Type *ty) {
   return i;
 }
 
-// initializer = "{" initializer ("," initializer)* "}"
+// initializer = string-initializer | array-initializer
+//             | struct-initializer | union-initializer
 //             | assign
-// array-initializer = "{" initializer ("," initializer)* "}"
 static void array_initializer(Token **rest, Token *tok, Initializer *init) {
   tok = skip(tok, "{");
 
@@ -638,7 +657,35 @@ static void array_initializer(Token **rest, Token *tok, Initializer *init) {
   }
 }
 
-// initializer = string-initializer | array-initializer | assign
+// struct-initializer = "{" initializer ("," initializer)* "}"
+static void struct_initializer(Token **rest, Token *tok, Initializer *init) {
+  tok = skip(tok, "{");
+
+  Member *mem = init->ty->members;
+
+  while (!consume(rest, tok, "}")) {
+    if (mem != init->ty->members)
+      tok = skip(tok, ",");
+
+    if (mem) {
+      initializer2(&tok, tok, init->children[mem->idx]);
+      mem = mem->next;
+    } else {
+      tok = skip_excess_element(tok);
+    }
+  }
+}
+
+static void union_initializer(Token **rest, Token *tok, Initializer *init) {
+  // Unlike structs, union initializers take only one initializer,
+  // and that initializes the first union member.
+  tok = skip(tok, "{");
+  initializer2(&tok, tok, init->children[0]);
+  *rest = skip(tok, "}");
+}
+
+// initializer = string-initializer | array-initializer
+//             | struct-initializer | assign
 static void initializer2(Token **rest, Token *tok, Initializer *init) {
   if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
     string_initializer(rest, tok, init);
@@ -647,6 +694,28 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
 
   if (init->ty->kind == TY_ARRAY) {
     array_initializer(rest, tok, init);
+    return;
+  }
+
+  if (init->ty->kind == TY_STRUCT) {
+    // A struct can be initialized with another struct. E.g.
+    // `struct T x = y;` where y is a variable of type `struct T`.
+    // Handle that case first.
+    if (!equal(tok, "{")) {
+      Node *expr = assign(rest, tok);
+      add_type(expr);
+      if (expr->ty->kind == TY_STRUCT) {
+        init->expr = expr;
+        return;
+      }
+    }
+
+    struct_initializer(rest, tok, init);
+    return;
+  }
+
+  if (init->ty->kind == TY_UNION) {
+    union_initializer(rest, tok, init);
     return;
   }
 
@@ -665,6 +734,12 @@ static Node *init_desg_expr(InitDesg *desg, Token *tok) {
   if (desg->var)
     return new_var_node(desg->var, tok);
 
+  if (desg->member) {
+    Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
+    node->member = desg->member;
+    return node;
+  }
+
   Node *lhs = init_desg_expr(desg->next, tok);
   Node *rhs = new_num(desg->idx, tok);
   return new_unary(ND_DEREF, new_add(lhs, rhs, tok), tok);
@@ -680,6 +755,23 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg,
       node = new_binary(ND_COMMA, node, rhs, tok);
     }
     return node;
+  }
+
+  if (ty->kind == TY_STRUCT && !init->expr) {
+    Node *node = new_node(ND_NULL_EXPR, tok);
+
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      InitDesg desg2 = {desg, 0, mem};
+      Node *rhs =
+          create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+      node = new_binary(ND_COMMA, node, rhs, tok);
+    }
+    return node;
+  }
+
+  if (ty->kind == TY_UNION) {
+    InitDesg desg2 = {desg, 0, ty->members};
+    return create_lvar_init(init->children[0], ty->members->ty, &desg2, tok);
   }
 
   if (!init->expr)
@@ -701,7 +793,7 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg,
 //   x[1][1] = 9;
 static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
-  InitDesg desg = {NULL, 0, var};
+  InitDesg desg = {NULL, 0, NULL, var};
 
   // If a partial initializer list is given, the standard requires
   // that unspecified elements are set to 0. Here, we simply
@@ -712,6 +804,73 @@ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
 
   Node *rhs = create_lvar_init(init, var->ty, &desg, tok);
   return new_binary(ND_COMMA, lhs, rhs, tok);
+}
+
+static void write_buf(char *buf, uint64_t val, int sz) {
+  if (sz == 1)
+    *buf = val;
+  else if (sz == 2)
+    *(uint16_t *)buf = val;
+  else if (sz == 4)
+    *(uint32_t *)buf = val;
+  else if (sz == 8)
+    *(uint64_t *)buf = val;
+  else
+    unreachable();
+}
+
+static Relocation *write_gvar_data(Relocation *cur, Initializer *init, Type *ty,
+                                   char *buf, int offset) {
+  if (ty->kind == TY_ARRAY) {
+    int sz = ty->base->size;
+    for (int i = 0; i < ty->array_len; i++)
+      cur = write_gvar_data(cur, init->children[i], ty->base, buf,
+                            offset + sz * i);
+    return cur;
+  }
+
+  if (ty->kind == TY_STRUCT) {
+    for (Member *mem = ty->members; mem; mem = mem->next)
+      cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
+                            offset + mem->offset);
+    return cur;
+  }
+
+  if (ty->kind == TY_UNION)
+    return write_gvar_data(cur, init->children[0], ty->members->ty, buf,
+                           offset);
+
+  if (!init->expr)
+    return cur;
+
+  char *label = NULL;
+  uint64_t val = eval2(init->expr, &label);
+
+  if (!label) {
+    write_buf(buf + offset, val, ty->size);
+    return cur;
+  }
+
+  Relocation *rel = calloc(1, sizeof(Relocation));
+  rel->offset = offset;
+  rel->label = label;
+  rel->addend = val;
+  cur->next = rel;
+  return cur->next;
+}
+
+// Initializers for global variables are evaluated at compile-time and
+// embedded to .data section. This function serializes Initializer
+// objects to a flat byte array. It is a compile error if an
+// initializer list contains a non-constant expression.
+static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+  Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+
+  Relocation head = {};
+  char *buf = calloc(1, var->ty->size);
+  write_gvar_data(&head, init, var->ty, buf, 0);
+  var->init_data = buf;
+  var->rel = head.next;
 }
 
 // Returns true if a given token represents a type.
@@ -945,15 +1104,22 @@ static Node *expr(Token **rest, Token *tok) {
   return node;
 }
 
+static int64_t eval(Node *node) { return eval2(node, NULL); }
+
 // Evaluate a given node as a constant expression.
-static int64_t eval(Node *node) {
+//
+// A constant expression is either just a number or ptr+n where ptr
+// is a pointer to a global variable and n is a postiive/negative
+// number. The latter form is accepted only as an initialization
+// expression for a global variable.
+static int64_t eval2(Node *node, char **label) {
   add_type(node);
 
   switch (node->kind) {
   case ND_ADD:
-    return eval(node->lhs) + eval(node->rhs);
+    return eval2(node->lhs, label) + eval(node->rhs);
   case ND_SUB:
-    return eval(node->lhs) - eval(node->rhs);
+    return eval2(node->lhs, label) - eval(node->rhs);
   case ND_MUL:
     return eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
@@ -981,9 +1147,10 @@ static int64_t eval(Node *node) {
   case ND_LE:
     return eval(node->lhs) <= eval(node->rhs);
   case ND_COND:
-    return eval(node->cond) ? eval(node->then) : eval(node->els);
+    return eval(node->cond) ? eval2(node->then, label)
+                            : eval2(node->els, label);
   case ND_COMMA:
-    return eval(node->rhs);
+    return eval2(node->rhs, label);
   case ND_NOT:
     return !eval(node->lhs);
   case ND_BITNOT:
@@ -992,23 +1159,56 @@ static int64_t eval(Node *node) {
     return eval(node->lhs) && eval(node->rhs);
   case ND_LOGOR:
     return eval(node->lhs) || eval(node->rhs);
-  case ND_CAST:
+  case ND_CAST: {
+    int64_t val = eval2(node->lhs, label);
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1:
-        return (uint8_t)eval(node->lhs);
+        return (uint8_t)val;
       case 2:
-        return (uint16_t)eval(node->lhs);
+        return (uint16_t)val;
       case 4:
-        return (uint32_t)eval(node->lhs);
+        return (uint32_t)val;
       }
     }
-    return eval(node->lhs);
+    return val;
+  }
+  case ND_ADDR:
+    return eval_rval(node->lhs, label);
+  case ND_MEMBER:
+    if (!label)
+      error_tok(node->tok, "not a compile-time constant");
+    if (node->ty->kind != TY_ARRAY)
+      error_tok(node->tok, "invalid initializer");
+    return eval_rval(node->lhs, label) + node->member->offset;
+  case ND_VAR:
+    if (!label)
+      error_tok(node->tok, "not a compile-time constant");
+    if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
+      error_tok(node->tok, "invalid initializer");
+    *label = node->var->name;
+    return 0;
   case ND_NUM:
     return node->val;
   }
 
   error_tok(node->tok, "not a compile-time constant");
+}
+
+static int64_t eval_rval(Node *node, char **label) {
+  switch (node->kind) {
+  case ND_VAR:
+    if (node->var->is_local)
+      error_tok(node->tok, "not a compile-time constant");
+    *label = node->var->name;
+    return 0;
+  case ND_DEREF:
+    return eval2(node->lhs, label);
+  case ND_MEMBER:
+    return eval_rval(node->lhs, label) + node->member->offset;
+  }
+
+  error_tok(node->tok, "invalid initializer");
 }
 
 static int64_t const_expr(Token **rest, Token *tok) {
@@ -1379,18 +1579,21 @@ static Node *unary(Token **rest, Token *tok) {
 static void struct_members(Token **rest, Token *tok, Type *ty) {
   Member head = {};
   Member *cur = &head;
+  int idx = 0;
 
   while (!equal(tok, "}")) {
     Type *basety = declspec(&tok, tok, NULL);
-    int i = 0;
+    bool first = true;
 
     while (!consume(&tok, tok, ";")) {
-      if (i++)
+      if (!first)
         tok = skip(tok, ",");
+      first = false;
 
       Member *mem = calloc(1, sizeof(Member));
       mem->ty = declarator(&tok, tok, basety);
       mem->name = mem->ty->name;
+      mem->idx = idx++;
       cur = cur->next = mem;
     }
   }
@@ -1747,7 +1950,9 @@ static Token *global_variable(Token *tok, Type *basety) {
     first = false;
 
     Type *ty = declarator(&tok, tok, basety);
-    new_gvar(get_ident(ty->name), ty);
+    Obj *var = new_gvar(get_ident(ty->name), ty);
+    if (equal(tok, "="))
+      gvar_initializer(&tok, tok->next, var);
   }
   return tok;
 }
