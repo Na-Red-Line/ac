@@ -236,8 +236,16 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
 
     init->children = calloc(len, sizeof(Initializer *));
 
-    for (Member *mem = ty->members; mem; mem = mem->next)
-      init->children[mem->idx] = new_initializer(mem->ty, false);
+    for (Member *mem = ty->members; mem; mem = mem->next) {
+      if (is_flexible && ty->is_flexible && !mem->next) {
+        Initializer *child = calloc(1, sizeof(Initializer));
+        child->ty = mem->ty;
+        child->is_flexible = true;
+        init->children[mem->idx] = child;
+      } else {
+        init->children[mem->idx] = new_initializer(mem->ty, false);
+      }
+    }
     return init;
   }
 
@@ -410,9 +418,14 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   return ty;
 }
 
-// func-params = (param ("," param)*)? ")"
+// func-params = ("void" | param ("," param)*)? ")"
 // param       = declspec declarator
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
+  if (equal(tok, "void") && equal(tok->next, ")")) {
+    *rest = tok->next->next;
+    return func_type(ty);
+  }
+
   Type head = {};
   Type *cur = &head;
 
@@ -516,10 +529,28 @@ static Type *typename(Token **rest, Token *tok) {
   return abstract_declarator(rest, tok, ty);
 }
 
+static bool is_end(Token *tok) {
+  return equal(tok, "}") || (equal(tok, ",") && equal(tok->next, "}"));
+}
+
+static bool consume_end(Token **rest, Token *tok) {
+  if (equal(tok, "}")) {
+    *rest = tok->next;
+    return true;
+  }
+
+  if (equal(tok, ",") && equal(tok->next, "}")) {
+    *rest = tok->next->next;
+    return true;
+  }
+
+  return false;
+}
+
 // enum-specifier = ident? "{" enum-list? "}"
 //                | ident ("{" enum-list? "}")?
 //
-// enum-list      = ident ("=" num)? ("," ident ("=" num)?)*
+// enum-list      = ident ("=" num)? ("," ident ("=" num)?)* ","?
 static Type *enum_specifier(Token **rest, Token *tok) {
   Type *ty = enum_type();
 
@@ -545,7 +576,7 @@ static Type *enum_specifier(Token **rest, Token *tok) {
   // Read an enum-list.
   int i = 0;
   int val = 0;
-  while (!equal(tok, "}")) {
+  while (!consume_end(rest, tok)) {
     if (i++ > 0)
       tok = skip(tok, ",");
 
@@ -559,8 +590,6 @@ static Type *enum_specifier(Token **rest, Token *tok) {
     sc->enum_ty = ty;
     sc->enum_val = val++;
   }
-
-  *rest = tok->next;
 
   if (tag)
     push_tag_scope(tag, ty);
@@ -627,7 +656,7 @@ static int count_array_init_elements(Token *tok, Type *ty) {
   Initializer *dummy = new_initializer(ty->base, false);
   int i = 0;
 
-  for (; !equal(tok, "}"); i++) {
+  for (; !consume_end(&tok, tok); i++) {
     if (i > 0)
       tok = skip(tok, ",");
     initializer2(&tok, tok, dummy);
@@ -635,10 +664,8 @@ static int count_array_init_elements(Token *tok, Type *ty) {
   return i;
 }
 
-// initializer = string-initializer | array-initializer
-//             | struct-initializer | union-initializer
-//             | assign
-static void array_initializer(Token **rest, Token *tok, Initializer *init) {
+// array-initializer1 = "{" initializer ("," initializer)* ","? "}"
+static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
   tok = skip(tok, "{");
 
   if (init->is_flexible) {
@@ -646,7 +673,7 @@ static void array_initializer(Token **rest, Token *tok, Initializer *init) {
     *init = *new_initializer(array_of(init->ty->base, len), false);
   }
 
-  for (int i = 0; !consume(rest, tok, "}"); i++) {
+  for (int i = 0; !consume_end(rest, tok); i++) {
     if (i > 0)
       tok = skip(tok, ",");
 
@@ -657,13 +684,28 @@ static void array_initializer(Token **rest, Token *tok, Initializer *init) {
   }
 }
 
-// struct-initializer = "{" initializer ("," initializer)* "}"
-static void struct_initializer(Token **rest, Token *tok, Initializer *init) {
+// array-initializer2 = initializer ("," initializer)*
+static void array_initializer2(Token **rest, Token *tok, Initializer *init) {
+  if (init->is_flexible) {
+    int len = count_array_init_elements(tok, init->ty);
+    *init = *new_initializer(array_of(init->ty->base, len), false);
+  }
+
+  for (int i = 0; i < init->ty->array_len && !is_end(tok); i++) {
+    if (i > 0)
+      tok = skip(tok, ",");
+    initializer2(&tok, tok, init->children[i]);
+  }
+  *rest = tok;
+}
+
+// struct-initializer1 = "{" initializer ("," initializer)* ","? "}"
+static void struct_initializer1(Token **rest, Token *tok, Initializer *init) {
   tok = skip(tok, "{");
 
   Member *mem = init->ty->members;
 
-  while (!consume(rest, tok, "}")) {
+  while (!consume_end(rest, tok)) {
     if (mem != init->ty->members)
       tok = skip(tok, ",");
 
@@ -676,16 +718,34 @@ static void struct_initializer(Token **rest, Token *tok, Initializer *init) {
   }
 }
 
+// struct-initializer2 = initializer ("," initializer)*
+static void struct_initializer2(Token **rest, Token *tok, Initializer *init) {
+  bool first = true;
+
+  for (Member *mem = init->ty->members; mem && !is_end(tok); mem = mem->next) {
+    if (!first)
+      tok = skip(tok, ",");
+    first = false;
+    initializer2(&tok, tok, init->children[mem->idx]);
+  }
+  *rest = tok;
+}
+
 static void union_initializer(Token **rest, Token *tok, Initializer *init) {
   // Unlike structs, union initializers take only one initializer,
   // and that initializes the first union member.
-  tok = skip(tok, "{");
-  initializer2(&tok, tok, init->children[0]);
-  *rest = skip(tok, "}");
+  if (equal(tok, "{")) {
+    initializer2(&tok, tok->next, init->children[0]);
+    consume(&tok, tok, ",");
+    *rest = skip(tok, "}");
+  } else {
+    initializer2(rest, tok, init->children[0]);
+  }
 }
 
 // initializer = string-initializer | array-initializer
-//             | struct-initializer | assign
+//             | struct-initializer | union-initializer
+//             | assign
 static void initializer2(Token **rest, Token *tok, Initializer *init) {
   if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
     string_initializer(rest, tok, init);
@@ -693,24 +753,30 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
   }
 
   if (init->ty->kind == TY_ARRAY) {
-    array_initializer(rest, tok, init);
+    if (equal(tok, "{"))
+      array_initializer1(rest, tok, init);
+    else
+      array_initializer2(rest, tok, init);
     return;
   }
 
   if (init->ty->kind == TY_STRUCT) {
+    if (equal(tok, "{")) {
+      struct_initializer1(rest, tok, init);
+      return;
+    }
+
     // A struct can be initialized with another struct. E.g.
     // `struct T x = y;` where y is a variable of type `struct T`.
     // Handle that case first.
-    if (!equal(tok, "{")) {
-      Node *expr = assign(rest, tok);
-      add_type(expr);
-      if (expr->ty->kind == TY_STRUCT) {
-        init->expr = expr;
-        return;
-      }
+    Node *expr = assign(rest, tok);
+    add_type(expr);
+    if (expr->ty->kind == TY_STRUCT) {
+      init->expr = expr;
+      return;
     }
 
-    struct_initializer(rest, tok, init);
+    struct_initializer2(rest, tok, init);
     return;
   }
 
@@ -719,13 +785,50 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
     return;
   }
 
+  if (equal(tok, "{")) {
+    // An initializer for a scalar variable can be surrounded by
+    // braces. E.g. `int x = {3};`. Handle that case.
+    initializer2(&tok, tok->next, init);
+    *rest = skip(tok, "}");
+    return;
+  }
+
   init->expr = assign(rest, tok);
+}
+
+static Type *copy_struct_type(Type *ty) {
+  ty = copy_type(ty);
+
+  Member head = {};
+  Member *cur = &head;
+  for (Member *mem = ty->members; mem; mem = mem->next) {
+    Member *m = calloc(1, sizeof(Member));
+    *m = *mem;
+    cur = cur->next = m;
+  }
+
+  ty->members = head.next;
+  return ty;
 }
 
 static Initializer *initializer(Token **rest, Token *tok, Type *ty,
                                 Type **new_ty) {
   Initializer *init = new_initializer(ty, true);
   initializer2(rest, tok, init);
+
+  if ((ty->kind == TY_STRUCT || ty->kind == TY_UNION) && ty->is_flexible) {
+    ty = copy_struct_type(ty);
+
+    Member *mem = ty->members;
+    while (mem->next)
+      mem = mem->next;
+    mem->ty = init->children[mem->idx]->ty;
+    ty->size += mem->ty->size;
+
+    *new_ty = ty;
+    return init;
+  }
+
   *new_ty = init->ty;
   return init;
 }
@@ -1596,6 +1699,14 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
       mem->idx = idx++;
       cur = cur->next = mem;
     }
+  }
+
+  // If the last element is an array of incomplete type, it's
+  // called a "flexible array member". It should behave as if
+  // if were a zero-sized array.
+  if (cur != &head && cur->ty->kind == TY_ARRAY && cur->ty->array_len < 0) {
+    cur->ty = array_of(cur->ty->base, 0);
+    ty->is_flexible = true;
   }
 
   *rest = tok->next;
