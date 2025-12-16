@@ -82,8 +82,9 @@ static Obj *current_fn;
 static Node *gotos = NULL;
 static Node *labels = NULL;
 
-// Current "goto" jump target.
+// Current "goto" and "continue" jump targets.
 static char *brk_label = NULL;
+static char *cont_label = NULL;
 
 // Points to a node representing a switch if we are parsing
 // a switch statement. Otherwise, NULL.
@@ -279,6 +280,7 @@ static Obj *new_gvar(char *name, Type *ty) {
   Obj *var = new_var(name, ty);
   var->next = globals;
   var->is_definition = true;
+  var->is_static = true;
   globals = var;
   return var;
 }
@@ -1027,7 +1029,7 @@ static bool is_typename(Token *tok) {
   return find_typedef(tok);
 }
 
-// stmt = "return" expr ";"
+// stmt = "return" expr? ";"
 //      | "if" "(" expr ")" stmt
 //      | "switch" "(" expr ")" stmt
 //      | "case" const-expr ":" stmt
@@ -1035,14 +1037,19 @@ static bool is_typename(Token *tok) {
 //      | "default" ":" stmt
 //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
 //      | "while" "(" expr? ")" stmt
+//      | "do" stmt "while" "(" expr ")" ";"
 //      | "goto" ident ";"
 //      | "break" ";"
+//      | "continue" ";"
 //      | ident ":" stmt
 //      | "{" compound-stmt
 //      | expr-stmt
 static Node *stmt(Token **rest, Token *tok) {
   if (equal(tok, "return")) {
     Node *node = new_node(ND_RETURN, tok);
+    if (consume(rest, tok->next, ";"))
+      return node;
+
     Node *exp = expr(&tok, tok->next);
     *rest = skip(tok, ";");
 
@@ -1116,7 +1123,9 @@ static Node *stmt(Token **rest, Token *tok) {
     enter_scope();
 
     char *brk = brk_label;
+    char *cont = cont_label;
     brk_label = node->brk_label = new_unique_name();
+    cont_label = node->cont_label = new_unique_name();
 
     if (is_typename(tok)) {
       Type *basety = declspec(&tok, tok, NULL);
@@ -1137,6 +1146,7 @@ static Node *stmt(Token **rest, Token *tok) {
 
     leave_scope();
     brk_label = brk;
+    cont_label = cont;
     return node;
   }
 
@@ -1147,9 +1157,35 @@ static Node *stmt(Token **rest, Token *tok) {
     tok = skip(tok, ")");
 
     char *brk = brk_label;
+    char *cont = cont_label;
     brk_label = node->brk_label = new_unique_name();
+    cont_label = node->cont_label = new_unique_name();
+
     node->then = stmt(rest, tok);
+
     brk_label = brk;
+    cont_label = cont;
+    return node;
+  }
+
+  if (equal(tok, "do")) {
+    Node *node = new_node(ND_DO, tok);
+
+    char *brk = brk_label;
+    char *cont = cont_label;
+    brk_label = node->brk_label = new_unique_name();
+    cont_label = node->cont_label = new_unique_name();
+
+    node->then = stmt(&tok, tok->next);
+
+    brk_label = brk;
+    cont_label = cont;
+
+    tok = skip(tok, "while");
+    tok = skip(tok, "(");
+    node->cond = expr(&tok, tok);
+    tok = skip(tok, ")");
+    *rest = skip(tok, ";");
     return node;
   }
 
@@ -1167,6 +1203,16 @@ static Node *stmt(Token **rest, Token *tok) {
       error_tok(tok, "stray break");
     Node *node = new_node(ND_GOTO, tok);
     node->unique_label = brk_label;
+    *rest = skip(tok->next, ";");
+    return node;
+  }
+
+  if (equal(tok, "continue")) {
+    if (!cont_label)
+      error_tok(tok, "stray continue");
+
+    Node *node = new_node(ND_GOTO, tok);
+    node->unique_label = cont_label;
     *rest = skip(tok->next, ";");
     return node;
   }
@@ -1684,6 +1730,12 @@ static Node *cast(Token **rest, Token *tok) {
     Token *start = tok;
     Type *ty = typename(&tok, tok->next);
     tok = skip(tok, ")");
+
+    // compound literal
+    if (equal(tok, "{"))
+      return unary(rest, start);
+
+    // type cast
     Node *node = new_cast(cast(rest, tok), ty);
     node->tok = start;
     return node;
@@ -1874,8 +1926,27 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
                   node->ty);
 }
 
-// postfix = primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
+// postfix = "(" type-name ")" "{" initializer-list "}"
+//         | primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
 static Node *postfix(Token **rest, Token *tok) {
+  if (equal(tok, "(") && is_typename(tok->next)) {
+    // Compound literal
+    Token *start = tok;
+    Type *ty = typename(&tok, tok->next);
+    tok = skip(tok, ")");
+
+    if (scope->next == NULL) {
+      Obj *var = new_anon_gvar(ty);
+      gvar_initializer(rest, tok, var);
+      return new_var_node(var, start);
+    }
+
+    Obj *var = new_lvar("", ty);
+    Node *lhs = lvar_initializer(rest, tok, var);
+    Node *rhs = new_var_node(var, tok);
+    return new_binary(ND_COMMA, lhs, rhs, start);
+  }
+
   Node *node = primary(&tok, tok);
 
   while (true) {
@@ -2127,6 +2198,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
     Type *ty = declarator(&tok, tok, basety);
     Obj *var = new_gvar(get_ident(ty->name), ty);
     var->is_definition = !attr->is_extern;
+    var->is_static = attr->is_static;
     if (attr->align)
       var->align = attr->align;
 

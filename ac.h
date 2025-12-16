@@ -137,6 +137,7 @@ typedef enum {
   ND_RETURN,    // "return"
   ND_IF,        // "if"
   ND_FOR,       // "for" or "while"
+  ND_DO,        // "do"
   ND_SWITCH,    // "switch"
   ND_CASE,      // "case"
   ND_BLOCK,     // { ... }
@@ -168,8 +169,9 @@ struct Node {
   Node *init;
   Node *inc;
 
-  // "break" label
+  // "break" and "continue" labels
   char *brk_label;
+  char *cont_label;
 
   // Block or statement expression
   Node *body;

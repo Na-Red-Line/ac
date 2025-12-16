@@ -288,7 +288,14 @@ static void gen_expr(Node *node) {
       pop(argreg64[i]);
 
     println("  mov $0, %%rax");
-    println("  call %s", node->funcname);
+
+    if (depth % 2 == 0) {
+      println("  call %s", node->funcname);
+    } else {
+      println("  sub $8, %%rsp");
+      println("  call %s", node->funcname);
+      println("  add $8, %%rsp");
+    }
     return;
   }
   }
@@ -407,9 +414,22 @@ static void gen_stmt(Node *node) {
       println("	je	%s", node->brk_label);
     }
     gen_stmt(node->then);
+    println("%s:", node->cont_label);
     if (node->inc)
       gen_expr(node->inc);
     println("	jmp	.L.begin.%d", c);
+    println("%s:", node->brk_label);
+    return;
+  }
+
+  case ND_DO: {
+    int c = count();
+    println(".L.begin.%d:", c);
+    gen_stmt(node->then);
+    println("%s:", node->cont_label);
+    gen_expr(node->cond);
+    println("	cmp $0, %%rax");
+    println("  jne .L.begin.%d", c);
     println("%s:", node->brk_label);
     return;
   }
@@ -451,7 +471,8 @@ static void gen_stmt(Node *node) {
     return;
 
   case ND_RETURN:
-    gen_expr(node->lhs);
+    if (node->lhs)
+      gen_expr(node->lhs);
     println("	jmp .L.return.%s", current_fn->name);
     return;
 
@@ -484,7 +505,11 @@ static void emit_data(Obj *prog) {
     if (var->is_function || !var->is_definition)
       continue;
 
-    println("  .globl %s", var->name);
+    if (var->is_static)
+      println("  .local %s", var->name);
+    else
+      println("  .globl %s", var->name);
+
     println("  .align %d", var->align);
 
     if (var->init_data) {
