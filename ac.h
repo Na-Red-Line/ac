@@ -92,6 +92,7 @@ struct Obj {
   Obj *params;
   Node *body;
   Obj *locals;
+  Obj *va_area;
   int stack_size;
 };
 
@@ -224,8 +225,9 @@ typedef enum {
 
 struct Type {
   TypeKind kind;
-  int size;  // sizeof() value
-  int align; // alignment
+  int size;         // sizeof() value
+  int align;        // alignment
+  bool is_unsigned; // unsigned or signed
 
   // Pointer
   Type *base;
@@ -239,6 +241,7 @@ struct Type {
   // Struct
   Member *members;
   bool is_flexible;
+  bool is_variadic;
 
   // Function type
   Type *return_ty;
@@ -264,6 +267,11 @@ extern Type *ty_char;
 extern Type *ty_short;
 extern Type *ty_int;
 extern Type *ty_long;
+
+extern Type *ty_uchar;
+extern Type *ty_ushort;
+extern Type *ty_uint;
+extern Type *ty_ulong;
 
 bool is_integer(Type *ty);
 Type *copy_type(Type *ty);

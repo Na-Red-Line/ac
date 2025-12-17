@@ -323,6 +323,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
 
 // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
 //             | "typedef" | "static" | "extern"
+//             | "signed" | "unsigned"
 //             | struct-decl | union-decl | typedef-name
 //             | enum-specifier)+
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
@@ -334,6 +335,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
     INT = 1 << 8,
     LONG = 1 << 10,
     OTHER = 1 << 12,
+    SIGNED = 1 << 13,
+    UNSIGNED = 1 << 14,
   };
 
   Type *ty = ty_int;
@@ -408,6 +411,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       counter += INT;
     else if (equal(tok, "long"))
       counter += LONG;
+    else if (equal(tok, "signed"))
+      counter |= SIGNED;
+    else if (equal(tok, "unsigned"))
+      counter |= UNSIGNED;
     else
       unreachable();
 
@@ -419,20 +426,46 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       ty = ty_bool;
       break;
     case CHAR:
+    case SIGNED + CHAR:
       ty = ty_char;
+      break;
+    case UNSIGNED + CHAR:
+      ty = ty_uchar;
       break;
     case SHORT:
     case SHORT + INT:
+    case SIGNED + SHORT:
+    case SIGNED + SHORT + INT:
       ty = ty_short;
       break;
+    case UNSIGNED + SHORT:
+    case UNSIGNED + SHORT + INT:
+      ty = ty_ushort;
+      break;
     case INT:
+    case SIGNED:
+    case SIGNED + INT:
       ty = ty_int;
+      break;
+    case UNSIGNED:
+    case UNSIGNED + INT:
+      ty = ty_uint;
       break;
     case LONG:
     case LONG + INT:
     case LONG + LONG:
     case LONG + LONG + INT:
+    case SIGNED + LONG:
+    case SIGNED + LONG + INT:
+    case SIGNED + LONG + LONG:
+    case SIGNED + LONG + LONG + INT:
       ty = ty_long;
+      break;
+    case UNSIGNED + LONG:
+    case UNSIGNED + LONG + INT:
+    case UNSIGNED + LONG + LONG:
+    case UNSIGNED + LONG + LONG + INT:
+      ty = ty_ulong;
       break;
     default:
       error_tok(tok, "invalid type");
@@ -445,7 +478,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   return ty;
 }
 
-// func-params = ("void" | param ("," param)*)? ")"
+// func-params = ("void" | param ("," param)* ("," "...")?)? ")"
 // param       = declspec declarator
 static Type *func_params(Token **rest, Token *tok, Type *ty) {
   if (equal(tok, "void") && equal(tok->next, ")")) {
@@ -455,10 +488,18 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
 
   Type head = {};
   Type *cur = &head;
+  bool is_variadic = false;
 
   while (!equal(tok, ")")) {
     if (cur != &head)
       tok = skip(tok, ",");
+
+    if (equal(tok, "...")) {
+      is_variadic = true;
+      tok = tok->next;
+      skip(tok, ")");
+      break;
+    }
 
     Type *ty2 = declspec(&tok, tok, NULL);
     ty2 = declarator(&tok, tok, ty2);
@@ -474,8 +515,12 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
     cur = cur->next = copy_type(ty2);
   }
 
+  if (cur == &head)
+    is_variadic = true;
+
   ty = func_type(ty);
   ty->params = head.next;
+  ty->is_variadic = is_variadic;
   *rest = tok->next;
   return ty;
 }
@@ -1018,8 +1063,9 @@ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
   static char *kw[] = {
-      "void",  "_Bool",   "char", "short",  "int",    "long",     "struct",
-      "union", "typedef", "enum", "static", "extern", "_Alignas",
+      "void",   "_Bool",  "char",     "short",   "int",
+      "long",   "struct", "union",    "typedef", "enum",
+      "static", "extern", "_Alignas", "signed",  "unsigned",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -2014,6 +2060,9 @@ static Node *funcall(Token **rest, Token *tok) {
     Node *arg = assign(&tok, tok);
     add_type(arg);
 
+    if (!param_ty && !ty->is_variadic)
+      error_tok(tok, "too many arguments");
+
     if (param_ty) {
       if (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION)
         error_tok(arg->tok, "passing struct or union is not supported yet");
@@ -2023,6 +2072,9 @@ static Node *funcall(Token **rest, Token *tok) {
 
     cur = cur->next = arg;
   }
+
+  if (param_ty)
+    error_tok(tok, "too few arguments");
 
   *rest = skip(tok, ")");
 
@@ -2178,6 +2230,8 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
   enter_scope();
   create_param_lvars(ty->params);
   fn->params = locals;
+  if (ty->is_variadic)
+    fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
 
   tok = skip(tok, "{");
   fn->body = compound_stmt(&tok, tok);

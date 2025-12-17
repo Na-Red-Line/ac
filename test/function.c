@@ -66,6 +66,38 @@ void ret_none() {
   return;
 }
 
+_Bool true_fn();
+_Bool false_fn();
+char char_fn();
+short short_fn();
+
+unsigned char uchar_fn();
+unsigned short ushort_fn();
+
+char schar_fn();
+short sshort_fn();
+
+int add_all(int n, ...);
+
+typedef struct {
+  int gp_offset;
+  int fp_offset;
+  void *overflow_arg_area;
+  void *reg_save_area;
+} __va_elem;
+
+typedef __va_elem va_list[1];
+
+int add_all(int n, ...);
+int sprintf(char *buf, char *fmt, ...);
+int vsprintf(char *buf, char *fmt, va_list ap);
+
+char *fmt(char *buf, char *fmt, ...) {
+  va_list ap;
+  *ap = *(__va_elem *)__va_area__;
+  vsprintf(buf, fmt, ap);
+}
+
 int main() {
   ASSERT(3, ret3());
   ASSERT(8, add2(3, 5));
@@ -106,6 +138,26 @@ int main() {
   ASSERT(6, counter());
 
   ret_none();
+
+  ASSERT(1, true_fn());
+  ASSERT(0, false_fn());
+  ASSERT(3, char_fn());
+  ASSERT(5, short_fn());
+
+  ASSERT(6, add_all(3,1,2,3));
+  ASSERT(5, add_all(4,1,2,3,-1));
+
+  { char buf[100]; fmt(buf, "%d %d %s", 1, 2, "foo"); printf("%s\n", buf); }
+
+  ASSERT(0, ({ char buf[100]; sprintf(buf, "%d %d %s", 1, 2, "foo"); strcmp("1 2 foo", buf); }));
+
+  ASSERT(0, ({ char buf[100]; fmt(buf, "%d %d %s", 1, 2, "foo"); strcmp("1 2 foo", buf); }));
+
+  ASSERT(251, uchar_fn());
+  ASSERT(65528, ushort_fn());
+  ASSERT(-5, schar_fn());
+  ASSERT(-8, sshort_fn());
+
 
   printf("OK\n");
   return 0;

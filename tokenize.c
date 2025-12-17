@@ -106,8 +106,8 @@ static bool is_ident2(char c) { return is_ident1(c) || ('0' <= c && c <= '9'); }
 // Read a punctuator token from p and returns its length.
 static int read_punct(char *p) {
   static char *kw[] = {
-      "<<=", ">>=", "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
-      "++",  "--",  "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>",
+      "<<=", ">>=", "...", "==", "!=", "<=", ">=", "->", "+=", "-=", "*=",
+      "/=",  "++",  "--",  "%=", "&=", "|=", "^=", "&&", "||", "<<", ">>",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -129,11 +129,11 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
   static char *kw[] = {
-      "return",   "if",       "else",   "for",     "while",  "int",
-      "sizeof",   "char",     "struct", "union",   "short",  "long",
-      "void",     "typedef",  "_Bool",  "enum",    "static", "goto",
-      "break",    "switch",   "case",   "default", "extern", "_Alignof",
-      "_Alignas", "continue", "do",
+      "return",   "if",       "else",   "for",     "while",    "int",
+      "sizeof",   "char",     "struct", "union",   "short",    "long",
+      "void",     "typedef",  "_Bool",  "enum",    "static",   "goto",
+      "break",    "switch",   "case",   "default", "extern",   "_Alignof",
+      "_Alignas", "continue", "do",     "signed",  "unsigned",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -258,7 +258,7 @@ static Token *read_int_literal(char *start) {
     base = 8;
   }
 
-  long val = strtoul(p, &p, base);
+  int64_t val = strtoul(p, &p, base);
 
   if (isalnum(*p))
     error_at(p, "invalid digit");
