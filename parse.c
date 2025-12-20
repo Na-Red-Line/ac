@@ -332,7 +332,9 @@ static void push_tag_scope(Token *tok, Type *ty) {
 //             | "typedef" | "static" | "extern"
 //             | "signed" | "unsigned"
 //             | struct-decl | union-decl | typedef-name
-//             | enum-specifier)+
+//             | enum-specifier
+//             | "const" | "volatile" | "auto" | "register" | "restrict"
+//             | "__restrict" | "__restrict__" | "_Noreturn")+
 static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
   enum {
     VOID = 1 << 0,
@@ -369,6 +371,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
       tok = tok->next;
       continue;
     }
+
+    // These keywords are recognized but ignored.
+    if (consume(&tok, tok, "const") || consume(&tok, tok, "volatile") ||
+        consume(&tok, tok, "auto") || consume(&tok, tok, "register") ||
+        consume(&tok, tok, "restrict") || consume(&tok, tok, "__restrict") ||
+        consume(&tok, tok, "__restrict__") || consume(&tok, tok, "_Noreturn"))
+      continue;
 
     if (equal(tok, "_Alignas")) {
       if (!attr)
@@ -559,12 +568,23 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
   return ty;
 }
 
-//  char (*x)[3];
-
-// declarator = "*"* ("(" ident ")" | "(" declarator ")" | ident) type-suffix
-static Type *declarator(Token **rest, Token *tok, Type *ty) {
-  while (consume(&tok, tok, "*"))
+// pointers = ("*" ("const" | "volatile" | "restrict")*)*
+static Type *pointers(Token **rest, Token *tok, Type *ty) {
+  while (consume(&tok, tok, "*")) {
     ty = pointer_to(ty);
+    while (equal(tok, "const") || equal(tok, "volatile") ||
+           equal(tok, "restrict") || equal(tok, "__restrict") ||
+           equal(tok, "__restrict__"))
+      tok = tok->next;
+  }
+  *rest = tok;
+  return ty;
+}
+
+// declarator = pointers ("(" ident ")" | "(" declarator ")" | ident)
+// type-suffix
+static Type *declarator(Token **rest, Token *tok, Type *ty) {
+  ty = pointers(&tok, tok, ty);
 
   if (equal(tok, "(")) {
     Token *start = tok;
@@ -584,11 +604,9 @@ static Type *declarator(Token **rest, Token *tok, Type *ty) {
 }
 
 // abstract-declarator = "*"* ("(" abstract-declarator ")")? type-suffix
+// abstract-declarator = pointers ("(" abstract-declarator ")")? type-suffix
 static Type *abstract_declarator(Token **rest, Token *tok, Type *ty) {
-  while (equal(tok, "*")) {
-    ty = pointer_to(ty);
-    tok = tok->next;
-  }
+  ty = pointers(&tok, tok, ty);
 
   if (equal(tok, "(")) {
     Token *start = tok;
@@ -1070,9 +1088,11 @@ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
 // Returns true if a given token represents a type.
 static bool is_typename(Token *tok) {
   static char *kw[] = {
-      "void",   "_Bool",  "char",     "short",   "int",
-      "long",   "struct", "union",    "typedef", "enum",
-      "static", "extern", "_Alignas", "signed",  "unsigned",
+      "void",       "_Bool",        "char",      "short",    "int",
+      "long",       "struct",       "union",     "typedef",  "enum",
+      "static",     "extern",       "_Alignas",  "signed",   "unsigned",
+      "const",      "volatile",     "auto",      "register", "restrict",
+      "__restrict", "__restrict__", "_Noreturn",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -1372,10 +1392,14 @@ static int64_t eval2(Node *node, char **label) {
   case ND_MUL:
     return eval(node->lhs) * eval(node->rhs);
   case ND_DIV:
+    if (node->ty->is_unsigned)
+      return (uint64_t)eval(node->lhs) / eval(node->rhs);
     return eval(node->lhs) / eval(node->rhs);
   case ND_NEG:
     return -eval(node->lhs);
   case ND_MOD:
+    if (node->ty->is_unsigned)
+      return (uint64_t)eval(node->lhs) % eval(node->rhs);
     return eval(node->lhs) % eval(node->rhs);
   case ND_BITAND:
     return eval(node->lhs) & eval(node->rhs);
@@ -1386,14 +1410,20 @@ static int64_t eval2(Node *node, char **label) {
   case ND_SHL:
     return eval(node->lhs) << eval(node->rhs);
   case ND_SHR:
+    if (node->ty->is_unsigned && node->ty->size == 8)
+      return (uint64_t)eval(node->lhs) >> eval(node->rhs);
     return eval(node->lhs) >> eval(node->rhs);
   case ND_EQ:
     return eval(node->lhs) == eval(node->rhs);
   case ND_NE:
     return eval(node->lhs) != eval(node->rhs);
   case ND_LT:
+    if (node->lhs->ty->is_unsigned)
+      return (uint64_t)eval(node->lhs) < eval(node->rhs);
     return eval(node->lhs) < eval(node->rhs);
   case ND_LE:
+    if (node->lhs->ty->is_unsigned)
+      return (uint64_t)eval(node->lhs) <= eval(node->rhs);
     return eval(node->lhs) <= eval(node->rhs);
   case ND_COND:
     return eval(node->cond) ? eval2(node->then, label)
@@ -1413,11 +1443,11 @@ static int64_t eval2(Node *node, char **label) {
     if (is_integer(node->ty)) {
       switch (node->ty->size) {
       case 1:
-        return (uint8_t)val;
+        return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
       case 2:
-        return (uint16_t)val;
+        return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
       case 4:
-        return (uint32_t)val;
+        return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
       }
     }
     return val;
