@@ -44,6 +44,7 @@ struct Token {
   TokenKind kind; // Token kind
   Token *next;    // Next token
   int64_t val;    // If kind is TK_NUM, its value
+  double fval;    // If kind is TK_NUM, its value
   char *loc;      // Token location
   int len;        // Token length
   Type *ty;       // Used if TK_NUM or TK_STR
@@ -73,6 +74,7 @@ struct Obj {
   Obj *next;
   char *name;    // Variable name
   Type *ty;      // Type
+  Token *tok;    // representative token
   bool is_local; // local or global/function
   int align;     // alignment
 
@@ -199,6 +201,7 @@ struct Node {
 
   // Numeric literal
   int64_t val;
+  double fval;
 };
 
 Node *new_cast(Node *expr, Type *ty);
@@ -215,6 +218,8 @@ typedef enum {
   TY_SHORT,
   TY_INT,
   TY_LONG,
+  TY_FLOAT,
+  TY_DOUBLE,
   TY_ENUM,
   TY_PTR,
   TY_FUNC,
@@ -234,6 +239,7 @@ struct Type {
 
   // Declaration
   Token *name;
+  Token *name_pos;
 
   // Array
   int array_len;
@@ -273,7 +279,12 @@ extern Type *ty_ushort;
 extern Type *ty_uint;
 extern Type *ty_ulong;
 
+extern Type *ty_float;
+extern Type *ty_double;
+
 bool is_integer(Type *ty);
+bool is_flonum(Type *ty);
+bool is_numeric(Type *ty);
 Type *copy_type(Type *ty);
 Type *pointer_to(Type *base);
 Type *func_type(Type *return_ty);

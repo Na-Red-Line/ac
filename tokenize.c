@@ -91,9 +91,7 @@ static Token *new_token(TokenKind kind, char *start, char *end) {
   return tok;
 }
 
-static bool startswith(char *p, char *q) {
-  return strncmp(p, q, strlen(q)) == 0;
-}
+static bool startswith(char *p, char *q) { return strncmp(p, q, strlen(q)) == 0; }
 
 // Returns true if c is valid as the first character of an identifier.
 static bool is_ident1(char c) {
@@ -129,14 +127,12 @@ static int from_hex(char c) {
 
 static bool is_keyword(Token *tok) {
   static char *kw[] = {
-      "return",       "if",        "else",     "for",      "while",
-      "int",          "sizeof",    "char",     "struct",   "union",
-      "short",        "long",      "void",     "typedef",  "_Bool",
-      "enum",         "static",    "goto",     "break",    "switch",
-      "case",         "default",   "extern",   "_Alignof", "_Alignas",
-      "continue",     "do",        "signed",   "unsigned", "const",
-      "volatile",     "auto",      "register", "restrict", "__restrict",
-      "__restrict__", "_Noreturn",
+      "return",       "if",        "else",     "for",      "while",    "int",      "sizeof",
+      "char",         "struct",    "union",    "short",    "long",     "void",     "typedef",
+      "_Bool",        "enum",      "static",   "goto",     "break",    "switch",   "case",
+      "default",      "extern",    "_Alignof", "_Alignas", "continue", "do",       "signed",
+      "unsigned",     "const",     "volatile", "auto",     "register", "restrict", "__restrict",
+      "__restrict__", "_Noreturn", "float",    "double",
   };
 
   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
@@ -286,9 +282,6 @@ static Token *read_int_literal(char *start) {
     u = true;
   }
 
-  if (isalnum(*p))
-    error_at(p, "invalid digit");
-
   // Infer a type.
   Type *ty;
   if (base == 10) {
@@ -319,6 +312,33 @@ static Token *read_int_literal(char *start) {
 
   Token *tok = new_token(TK_NUM, start, p);
   tok->val = val;
+  tok->ty = ty;
+  return tok;
+}
+
+static Token *read_number(char *start) {
+  // Try to parse as an integer constant.
+  Token *tok = read_int_literal(start);
+  if (!strchr(".eEfF", start[tok->len]))
+    return tok;
+
+  // If it's not an integer, it must be a floating point constant.
+  char *end;
+  double val = strtod(start, &end);
+
+  Type *ty;
+  if (tolower(*end) == 'f') {
+    ty = ty_float;
+    end++;
+  } else if (tolower(*end) == 'l') {
+    ty = ty_double;
+    end++;
+  } else {
+    ty = ty_double;
+  }
+
+  tok = new_token(TK_NUM, start, end);
+  tok->fval = val;
   tok->ty = ty;
   return tok;
 }
@@ -376,8 +396,8 @@ static Token *tokenize(char *filename, char *p) {
     }
 
     // Numeric literal
-    if (isdigit(*p)) {
-      cur = cur->next = read_int_literal(p);
+    if (isdigit(*p) || (*p == '.' && isdigit(p[1]))) {
+      cur = cur->next = read_number(p);
       p += cur->len;
       continue;
     }

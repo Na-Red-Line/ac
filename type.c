@@ -13,6 +13,9 @@ Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
 Type *ty_uint = &(Type){TY_INT, 4, 4, true};
 Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
 
+Type *ty_float = &(Type){TY_FLOAT, 4, 4};
+Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
+
 static Type *new_type(TypeKind kind, int size, int align) {
   Type *ty = calloc(1, sizeof(Type));
   ty->kind = kind;
@@ -23,9 +26,13 @@ static Type *new_type(TypeKind kind, int size, int align) {
 
 bool is_integer(Type *ty) {
   TypeKind k = ty->kind;
-  return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT ||
-         k == TY_LONG || k == TY_ENUM;
+  return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT || k == TY_INT || k == TY_LONG ||
+         k == TY_ENUM;
 }
+
+bool is_flonum(Type *ty) { return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE; }
+
+bool is_numeric(Type *ty) { return is_integer(ty) || is_flonum(ty); }
 
 Type *copy_type(Type *ty) {
   Type *ret = calloc(1, sizeof(Type));
@@ -61,6 +68,11 @@ Type *struct_type(void) { return new_type(TY_STRUCT, 0, 1); }
 static Type *get_common_type(Type *ty1, Type *ty2) {
   if (ty1->base)
     return pointer_to(ty1->base);
+
+  if (ty1->kind == TY_DOUBLE || ty2->kind == TY_DOUBLE)
+    return ty_double;
+  if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)
+    return ty_float;
 
   if (ty1->size < 4)
     ty1 = ty_int;
@@ -202,8 +214,7 @@ void add_type(Node *node) {
         return;
       }
     }
-    error_tok(node->tok,
-              "statement expression returning void is not supported");
+    error_tok(node->tok, "statement expression returning void is not supported");
     return;
   }
 }
