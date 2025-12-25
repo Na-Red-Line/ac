@@ -13,8 +13,8 @@ ac: $(OBJS)
 $(OBJS): ac.h
 
 test/%.exe: ac test/%.c
-	$(CC) -o- -E -P -C test/$*.c | ./ac -o test/$*.s -
-	$(CC) -o $@ test/$*.s -xc test/common
+	$(CC) -o- -E -P -C test/$*.c | ./ac -o test/$*.o -
+	$(CC) -o $@ test/$*.o -xc test/common
 
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
