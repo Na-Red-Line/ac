@@ -29,7 +29,7 @@ static void parse_args(int argc, char **argv) {
       usage(0);
 
     if (!strcmp(argv[i], "-o")) {
-      if (!argv[i++])
+      if (!argv[++i])
         usage(1);
       opt_o = argv[i];
       continue;
@@ -50,12 +50,14 @@ static void parse_args(int argc, char **argv) {
 
     input_path = argv[i];
   }
+
+  if (!input_path)
+    error("no input files");
 }
 
 static FILE *open_file(char *path) {
-  if (!path || strcmp(path, "-") == 0) {
+  if (!path || strcmp(path, "-") == 0)
     return stdout;
-  }
 
   FILE *out = fopen(path, "w");
   if (!out)
@@ -146,7 +148,6 @@ static void assemble(char *input, char *output) {
 
 int main(int argc, char **argv) {
   atexit(cleanup);
-
   parse_args(argc, argv);
 
   if (opt_cc1) {

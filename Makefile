@@ -18,7 +18,7 @@ test/%.exe: ac test/%.c
 
 test: $(TESTS)
 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
-	test/driver.sh
+	test/driver.sh ./ac
 
 clean:
 	rm -rf ac tmp* $(TESTS) test/*.s test/*.exe
